@@ -1,0 +1,6 @@
+
+__pycache__/
+*.pyc
+output/
+pcap/processed_*.pcap
+esdata/
