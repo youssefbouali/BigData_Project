@@ -1,14 +1,16 @@
 version: "3.8"
 
 services:
-  zookeeper:
-    image: confluentinc/cp-zookeeper:7.6.1
-    container_name: zookeeper
-    environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
-      ZOOKEEPER_TICK_TIME: 2000
+
+  cassandra:
+    image: cassandra:4.1
+    container_name: cassandra
     ports:
-      - "2181:2181"
+      - "9042:9042"
+    environment:
+      - CASSANDRA_CLUSTER_NAME=BigDataCluster
+      - CASSANDRA_NUM_TOKENS=8
+      - CASSANDRA_START_RPC=true
     networks:
       - netflow_net
 
@@ -25,6 +27,28 @@ services:
       KAFKA_LISTENERS: PLAINTEXT://:9092
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    networks:
+      - netflow_net
+
+  spark:
+    image: apache/spark:3.5.0
+    container_name: spark
+    user: root
+    environment:
+      - SPARK_MODE=master
+    ports:
+      - "8080:8080"
+    networks:
+      - netflow_net
+      
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.1
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
     networks:
       - netflow_net
 
@@ -47,29 +71,6 @@ services:
       - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
     ports:
       - "5601:5601"
-    networks:
-      - netflow_net
-
-  cassandra:
-    image: cassandra:4.1
-    container_name: cassandra
-    ports:
-      - "9042:9042"
-    environment:
-      - CASSANDRA_CLUSTER_NAME=BigDataCluster
-      - CASSANDRA_NUM_TOKENS=8
-      - CASSANDRA_START_RPC=true
-    networks:
-      - netflow_net
-
-  spark:
-    image: apache/spark:3.5.0
-    container_name: spark
-    user: root
-    environment:
-      - SPARK_MODE=master
-    ports:
-      - "8080:8080"
     networks:
       - netflow_net
 
