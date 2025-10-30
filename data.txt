@@ -1,0 +1,3 @@
+https://www.kaggle.com/datasets/athena21/netflow-datasets-v2 8GB
+
+https://staff.itee.uq.edu.au/marius/NIDS_datasets/
