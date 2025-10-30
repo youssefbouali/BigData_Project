@@ -2,7 +2,7 @@
 version: '3.8'
 services:
   kafka:
-    image: bitnami/kafka:3.7
+    image: bitnami/kafka:latest
     container_name: kafka
     environment:
       - KAFKA_ENABLE_KRAFT=yes
