@@ -35,8 +35,10 @@ services:
       - SPARK_MODE=master
     ports:
       - "8080:8080"
+    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.master.Master", "--host", "0.0.0.0"]
     networks:
       - netflow_net
+  
 
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.12.0
