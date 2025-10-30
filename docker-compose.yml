@@ -63,7 +63,7 @@ services:
       - netflow_net
 
   spark:
-    image: bitnami/spark:3.5.1
+    image: bitnami/spark:3.5.0
     container_name: spark
     user: root
     environment:
