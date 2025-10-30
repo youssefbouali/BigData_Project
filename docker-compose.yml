@@ -1,99 +1,77 @@
+version: "3.8"
 
-version: '3.8'
 services:
-  kafka:
-    image: bitnami/kafka:3.6.1
-    container_name: kafka
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.1
+    container_name: zookeeper
     environment:
-      - KAFKA_ENABLE_KRAFT=yes
-      - KAFKA_CFG_PROCESS_ROLES=controller,broker
-      - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
-      - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093
-      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://localhost:9092
-      - KAFKA_CFG_NODE_ID=1
-      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=1@kafka:9093
-      - KAFKA_CFG_LOG_DIRS=/tmp/kraft-combined-logs
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    networks:
+      - netflow_net
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: kafka
+    depends_on:
+      - zookeeper
     ports:
       - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENERS: PLAINTEXT://:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    networks:
+      - netflow_net
 
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.12.0
+    container_name: elasticsearch
+    environment:
+      - discovery.type=single-node
+      - ES_JAVA_OPTS=-Xms1g -Xmx1g
+      - xpack.security.enabled=false
+    ports:
+      - "9200:9200"
+    networks:
+      - netflow_net
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.12.0
+    container_name: kibana
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    ports:
+      - "5601:5601"
+    networks:
+      - netflow_net
 
   cassandra:
-    image: cassandra:3.11
+    image: cassandra:4.1
     container_name: cassandra
     ports:
       - "9042:9042"
     environment:
-      CASSANDRA_START_RPC: 'true'
-
-  elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
-    environment:
-      - discovery.type=single-node
-      - xpack.security.enabled=false
-      - "ES_JAVA_OPTS=-Xms1g -Xmx1g"
-    ulimits:
-      memlock:
-        soft: -1
-        hard: -1
-    mem_limit: 1g
-    ports:
-      - "9200:9200"
-    volumes:
-      - esdata:/usr/share/elasticsearch/data
-
-  kibana:
-    image: docker.elastic.co/kibana/kibana:8.11.0
-    environment:
-      ELASTICSEARCH_HOSTS: http://elasticsearch:9200
-    ports:
-      - "5601:5601"
-    depends_on:
-      - elasticsearch
-
-  pcap_processor:
-    build:
-      context: ./pcap_processor
-    container_name: pcap_processor
-    privileged: true
-    volumes:
-      - ./pcap:/pcap
-      - ./output:/output
-      - ./cicflowmeter:/cicflowmeter
+      - CASSANDRA_CLUSTER_NAME=BigDataCluster
+      - CASSANDRA_NUM_TOKENS=8
+      - CASSANDRA_START_RPC=true
     networks:
       - netflow_net
 
-  producer:
-    build:
-      context: ./producer
-    container_name: csv_producer
-    depends_on:
-      - kafka
-    volumes:
-      - ./output:/output
+  spark:
+    image: bitnami/spark:3.5.1
+    container_name: spark
+    user: root
     environment:
-      KAFKA_BOOTSTRAP: "kafka:9092"
-    command: ["python", "producer.py"]
-
-  spark_job:
-    build:
-      context: ./spark_job
-    container_name: spark_job_runner
-    depends_on:
-      - kafka
-      - cassandra
-      - elasticsearch
-    volumes:
-      - ./spark_job:/app
-    environment:
-      KAFKA_BOOTSTRAP: "kafka:9092"
-      CASSANDRA_HOST: "cassandra"
-      ES_HOST: "elasticsearch"
-    command: ["bash", "/app/run_spark.sh"]
+      - SPARK_MODE=master
+    ports:
+      - "8080:8080"
     networks:
       - netflow_net
-
-volumes:
-  esdata:
 
 networks:
   netflow_net:
