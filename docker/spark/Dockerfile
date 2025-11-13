@@ -1,4 +1,4 @@
-FROM openjdk:11-jre-slim
+FROM eclipse-temurin:11-jre
 
 USER root
 ENV SPARK_VERSION=3.3.0
