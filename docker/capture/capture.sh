@@ -30,15 +30,22 @@ inotifywait -m $PCAP_DIR -e create -e moved_to |
             nfdump -r "$FLOW_DIR/nfcapd."* -o csv > "$CSV_FILE.tmp"
             mv "$CSV_FILE.tmp" "$CSV_FILE"
 
-            # 3. extraction CICFlowMeter
-            java -jar /CICFlowMeter.jar -r "$PCAP_FILE" -f "$CSV_FILE.cic"
-
-            # 4. merge (NetFlow + CIC)
-            python3 /convert_and_send.py \
-                --netflow "$CSV_FILE" \
-                --cic "$CSV_FILE.cic" \
-                --kafka "$KAFKA_BROKERS" \
-                --topic "$TOPIC"
+            # 3. extraction CICFlowMeter (if available)
+            if [ -f /CICFlowMeter.jar ]; then
+                java -jar /CICFlowMeter.jar -r "$PCAP_FILE" -f "$CSV_FILE.cic" || echo "CICFlowMeter failed, continuing without CIC features"
+                # 4. merge (NetFlow + CIC)
+                python3 /convert_and_send.py \
+                    --netflow "$CSV_FILE" \
+                    --cic "$CSV_FILE.cic" \
+                    --kafka "$KAFKA_BROKERS" \
+                    --topic "$TOPIC"
+            else
+                # 4. send only NetFlow (no CIC)
+                python3 /convert_and_send.py \
+                    --netflow "$CSV_FILE" \
+                    --kafka "$KAFKA_BROKERS" \
+                    --topic "$TOPIC"
+            fi
 
             # clean
             rm -f "$PCAP_FILE" "$CSV_FILE.cic"

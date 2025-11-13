@@ -1,25 +1,25 @@
-CREATE KEYSPACE IF NOT EXISTS security
-  WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 };
+-- docker/cassandra/init.cql
+CREATE KEYSPACE IF NOT EXISTS netflow WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};
 
-CREATE TABLE IF NOT EXISTS security.logs (
+CREATE TABLE IF NOT EXISTS netflow.flows (
     id UUID PRIMARY KEY,
-    src_ip TEXT,
-    dst_ip TEXT,
+    src_ip_int INT,
+    dst_ip_int INT,
     src_port INT,
     dst_port INT,
     protocol INT,
-    bytes_in BIGINT,
-    bytes_out BIGINT,
-    pkt_in BIGINT,
-    pkt_out BIGINT,
-    timestamp TIMESTAMP,
+    in_bytes BIGINT,
+    out_bytes BIGINT,
+    duration_ms BIGINT,
     label INT
 );
 
-CREATE TABLE IF NOT EXISTS security.predictions (
+CREATE TABLE IF NOT EXISTS netflow.predictions (
     id UUID PRIMARY KEY,
-    src_ip TEXT,
+    src_ip_int INT,
+    dst_ip_int INT,
+    src_port INT,
+    dst_port INT,
     prediction INT,
-    probability DOUBLE,
     timestamp TIMESTAMP
 );

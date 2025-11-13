@@ -3,17 +3,21 @@ FROM ubuntu:22.04
 RUN apt-get update && apt-get install -y \
     tcpdump \
     nfdump \
-    openjdk-11-jre \
+    default-jre \
     python3-pip \
     inotify-tools \
     wget \
     && rm -rf /var/lib/apt/lists/*
 
-# install CICFlowMeter
-RUN wget -q https://github.com/ahlashkari/CICFlowMeter/raw/master/CICFlowMeter-0.1.jar -O /CICFlowMeter.jar
+# install CICFlowMeter (optional - will use if available)
+# Try multiple possible URLs since GitHub raw links can be unreliable
+RUN wget -q --timeout=10 --tries=1 https://github.com/ahlashkari/CICFlowMeter/releases/download/v4.0/CICFlowMeter-4.0.jar -O /CICFlowMeter.jar || \
+    wget -q --timeout=10 --tries=1 https://github.com/ahlashkari/CICFlowMeter/raw/master/CICFlowMeter.jar -O /CICFlowMeter.jar || \
+    wget -q --timeout=10 --tries=1 https://github.com/ahlashkari/CICFlowMeter/raw/master/Release/CICFlowMeter.jar -O /CICFlowMeter.jar || \
+    echo "CICFlowMeter.jar not available - will continue without it" || true
 
 # install Python
-RUN pip3 install kafka-python pandas watchdog
+RUN pip3 install --break-system-packages kafka-python pandas watchdog
 
 # copy scripts
 COPY capture.sh /capture.sh

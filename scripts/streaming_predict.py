@@ -1,96 +1,64 @@
+# scripts/streaming_predict.py
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import *
+from pyspark.sql.functions import col, from_json, schema_of_json
 from pyspark.ml import PipelineModel
-from kafka import KafkaProducer
 import json
-from datetime import datetime
 
-spark = SparkSession.builder \
-    .appName("StreamingPredict") \
-    .config("spark.cassandra.connection.host", "cassandra") \
-    .getOrCreate()
+def start_streaming_prediction(model_path, kafka_bootstrap, kafka_topic, cassandra_host):
+    spark = SparkSession.builder \
+        .appName("Real-time Anomaly Detection") \
+        .config("spark.cassandra.connection.host", cassandra_host) \
+        .getOrCreate()
 
-# Charger modèle
-model = PipelineModel.load("/model/anomaly_model.spark")
+    # load model
+    model = PipelineModel.load(model_path)
 
-# Lire Kafka
-df = spark.readStream \
-    .format("kafka") \
-    .option("kafka.bootstrap.servers", "kafka:9092") \
-    .option("subscribe", "netflow-data") \
-    .load()
+    # read from Kafka
+    df = spark.readStream \
+        .format("kafka") \
+        .option("kafka.bootstrap.servers", kafka_bootstrap) \
+        .option("subscribe", kafka_topic) \
+        .load()
 
-# Convertir JSON
-raw = df.selectExpr("CAST(value AS STRING) as json").select(from_json(col("json"), "src_ip STRING, dst_ip STRING, src_port INT, dst_port INT, protocol INT, bytes_in LONG, bytes_out LONG, pkt_in LONG, pkt_out LONG").alias("data")).select("data.*")
+    # to JSON
+    schema = "SRC_IP_INT INT, DST_IP_INT INT, L4_SRC_PORT INT, L4_DST_PORT INT, PROTOCOL INT, " \
+             "IN_BYTES LONG, OUT_BYTES LONG, FLOW_DURATION_MILLISECONDS LONG, Label_Num INT"
 
-# Prédiction
-predictions = model.transform(raw)
+    parsed = df.selectExpr("CAST(value AS STRING) as json") \
+        .select(from_json(col("json"), schema).alias("data")) \
+        .select("data.*")
 
-# Extract probability as double for Cassandra (probability is a DenseVector)
-from pyspark.sql.functions import udf
-from pyspark.sql.types import DoubleType
+    # predictions
+    predictions = model.transform(parsed)
 
-def extract_prob_value(prob):
-    try:
-        if prob is not None:
-            # DenseVector has .values array
-            if hasattr(prob, 'values') and len(prob.values) > 1:
-                return float(prob.values[1])
-            elif hasattr(prob, '__getitem__'):
-                return float(prob[1])
-        return 0.0
-    except:
-        return 0.0
+    # predictions
+    alerts = predictions.filter(col("prediction") == 1) \
+        .select("SRC_IP_INT", "DST_IP_INT", "L4_SRC_PORT", "L4_DST_PORT", "prediction")
 
-extract_prob_udf = udf(extract_prob_value, DoubleType())
+    # write to Cassandra
+    query1 = predictions.writeStream \
+        .format("org.apache.spark.sql.cassandra") \
+        .options(table="predictions", keyspace="netflow") \
+        .outputMode("append") \
+        .start()
 
-# Prepare data for Cassandra
-predictions_with_prob = predictions.withColumn("prob_value", extract_prob_udf("probability"))
+    # send to Kafka
+    query2 = alerts.selectExpr("to_json(struct(*)) AS value") \
+        .writeStream \
+        .format("kafka") \
+        .option("kafka.bootstrap.servers", kafka_bootstrap) \
+        .option("topic", "alerts") \
+        .outputMode("append") \
+        .start()
 
-# Écrire dans Cassandra
-query1 = predictions_with_prob.select(
-    monotonically_increasing_id().alias("id"),
-    "src_ip",
-    "prediction",
-    col("prob_value").alias("probability"),
-    current_timestamp().alias("timestamp")
-).writeStream \
-    .format("org.apache.spark.sql.cassandra") \
-    .option("keyspace", "security") \
-    .option("table", "predictions") \
-    .outputMode("append") \
-    .start()
+    query1.awaitTermination()
+    query2.awaitTermination()
 
-# Alerte Kafka si anomalie
-kafka_producer = None
-
-def send_alert_batch(batch_df, batch_id):
-    global kafka_producer
-    if kafka_producer is None:
-        kafka_producer = KafkaProducer(
-            bootstrap_servers='kafka:9092',
-            value_serializer=lambda v: json.dumps(v).encode('utf-8')
-        )
-    
-    anomalies = batch_df.filter(batch_df.prediction == 1).collect()
-    for row in anomalies:
-        try:
-            prob_value = extract_prob_value(row.probability)
-            alert = {
-                "ip": str(row.src_ip),
-                "prob": prob_value,
-                "time": datetime.now().isoformat()
-            }
-            kafka_producer.send("alerts", alert)
-        except Exception as e:
-            print(f"Error sending alert: {e}")
-    
-    if kafka_producer:
-        kafka_producer.flush()
-
-query2 = predictions_with_prob.writeStream \
-    .foreachBatch(send_alert_batch) \
-    .start()
-
-query1.awaitTermination()
-query2.awaitTermination()
+# rum
+if __name__ == "__main__":
+    start_streaming_prediction(
+        model_path="/models/anomaly_model_rf.spark",
+        kafka_bootstrap="kafka:9092",
+        kafka_topic="netflow-data",
+        cassandra_host="cassandra"
+    )
