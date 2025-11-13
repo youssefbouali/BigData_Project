@@ -8,7 +8,7 @@ services:
     volumes:
       - cassandra-data:/var/lib/cassandra
       - ./docker/cassandra/init.cql:/init.cql
-    command: ["bash", "-c", "sleep 30 && cqlsh -f /init.cql && cassandra -f"]
+    command: ["bash", "-c", "cassandra -f & sleep 30 && until cqlsh -e 'describe cluster' > /dev/null 2>&1; do sleep 2; done && cqlsh -f /init.cql && wait"]
 
   spark-master:
     build:
@@ -21,14 +21,16 @@ services:
 
   spark-worker:
     build:
-      context: ./docker/spark
+      context: .
+      dockerfile: docker/spark/Dockerfile
     command: /start-worker.sh spark://spark-master:7077
     depends_on:
       - spark-master
 
   spark-submit:
     build:
-      context: ./docker/spark
+      context: .
+      dockerfile: docker/spark/Dockerfile
     depends_on:
       - spark-master
       - cassandra
