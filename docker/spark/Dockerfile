@@ -13,8 +13,10 @@ RUN apt-get update && apt-get install -y \
     curl \
     python3 \
     python3-pip \
-    && pip3 install --upgrade pip \
     && rm -rf /var/lib/apt/lists/*
+
+# Upgrade pip (using --break-system-packages for container environment)
+RUN pip3 install --break-system-packages --upgrade pip
 
 # Download and install Spark
 RUN wget -q https://archive.apache.org/dist/spark/spark-${SPARK_VERSION}/spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION}.tgz \
@@ -25,7 +27,7 @@ RUN wget -q https://archive.apache.org/dist/spark/spark-${SPARK_VERSION}/spark-$
 # Install Python dependencies
 COPY requirements.txt .
 COPY scripts ./scripts
-RUN pip3 install -r requirements.txt
+RUN pip3 install --break-system-packages -r requirements.txt
 
 # Cassandra & Kafka connectors for Spark 3.3.0
 RUN wget -q https://repo1.maven.org/maven2/com/datastax/spark/spark-cassandra-connector-assembly_2.12/3.3.0/spark-cassandra-connector-assembly_2.12-3.3.0.jar -P ${SPARK_HOME}/jars/
