@@ -1,67 +1,79 @@
-version: "3.8"
+version: '3.8'
 
 services:
-
   cassandra:
     image: cassandra:4.1
-    container_name: cassandra
     ports:
       - "9042:9042"
+    volumes:
+      - cassandra-data:/var/lib/cassandra
+      - ./docker/cassandra/init.cql:/init.cql
+    command: ["bash", "-c", "sleep 30 && cqlsh -f /init.cql && cassandra -f"]
+
+  spark-master:
+    build:
+      context: .
+      dockerfile: docker/spark/Dockerfile
+    command: /start-master.sh
+    ports:
+      - "8080:8080"
+      - "7077:7077"
+
+  spark-worker:
+    build:
+      context: ./docker/spark
+    command: /start-worker.sh spark://spark-master:7077
+    depends_on:
+      - spark-master
+
+  spark-submit:
+    build:
+      context: ./docker/spark
+    depends_on:
+      - spark-master
+      - cassandra
+      - kafka
+    volumes:
+      - ./scripts:/scripts
+      - ./data:/data
+      - ./model:/model
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
     environment:
-      - CASSANDRA_CLUSTER_NAME=BigDataCluster
-      - CASSANDRA_NUM_TOKENS=8
-      - CASSANDRA_START_RPC=true
-    networks:
-      - netflow_net
+      ZOOKEEPER_CLIENT_PORT: 2181
+    ports:
+      - "2181:2181"
 
   kafka:
-    image: confluentinc/cp-kafka:7.6.1
-    container_name: kafka
+    image: confluentinc/cp-kafka:latest
+    depends_on:
+      - zookeeper
     ports:
       - "9092:9092"
     environment:
       KAFKA_BROKER_ID: 1
-      KAFKA_LISTENERS: PLAINTEXT://:9092
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-    networks:
-      - netflow_net
 
-  spark:
-    image: apache/spark:3.5.0
-    container_name: spark
-    user: root
+
+
+  capture:
+    build:
+      context: ./docker/capture
+    privileged: true
+    network_mode: host
+    volumes:
+      - ./data/pcap:/pcap
+      - ./data/flows:/flows
+      - ./data/csv:/csv
+    depends_on:
+      - kafka
     environment:
-      - SPARK_MODE=master
-    ports:
-      - "8080:8080"
-    command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.master.Master", "--host", "0.0.0.0"]
-    networks:
-      - netflow_net
-  
+      - INTERFACE=eth0
+      - KAFKA_BROKERS=kafka:9092
+      - TOPIC=netflow-data
 
-  elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.12.0
-    container_name: elasticsearch
-    environment:
-      - discovery.type=single-node
-      - ES_JAVA_OPTS=-Xms1g -Xmx1g
-      - xpack.security.enabled=false
-    ports:
-      - "9200:9200"
-    networks:
-      - netflow_net
-
-  kibana:
-    image: docker.elastic.co/kibana/kibana:8.12.0
-    container_name: kibana
-    environment:
-      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
-    ports:
-      - "5601:5601"
-    networks:
-      - netflow_net
-
-networks:
-  netflow_net:
-    driver: bridge
+volumes:
+  cassandra-data:
