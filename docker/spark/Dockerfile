@@ -15,8 +15,8 @@ RUN apt-get update && apt-get install -y \
     python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
-# Upgrade pip (using --break-system-packages for container environment)
-RUN pip3 install --break-system-packages --upgrade pip
+# Skip pip upgrade - pip 24.0 from apt is recent enough
+# If upgrade needed later, use: python3 -m ensurepip --upgrade
 
 # Download and install Spark
 RUN wget -q https://archive.apache.org/dist/spark/spark-${SPARK_VERSION}/spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION}.tgz \
