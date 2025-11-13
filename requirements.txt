@@ -1,4 +1,4 @@
-pyspark==3.4.1
+pyspark==3.3.0
 pandas
 cassandra-driver
 kafka-python
