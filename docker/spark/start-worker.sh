@@ -1,3 +1,3 @@
 #!/bin/bash
 echo "Starting Spark Worker..."
-/opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker "$@"  
+/opt/bitnami/spark/bin/spark-class org.apache.spark.deploy.worker.Worker "$@"  
