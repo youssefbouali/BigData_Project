@@ -31,8 +31,8 @@ RUN pip3 install -r requirements.txt
 RUN wget -q https://repo1.maven.org/maven2/com/datastax/spark/spark-cassandra-connector-assembly_2.12/3.3.0/spark-cassandra-connector-assembly_2.12-3.3.0.jar -P ${SPARK_HOME}/jars/
 RUN wget -q https://repo1.maven.org/maven2/org/apache/spark/spark-sql-kafka-0-10_2.12/3.3.0/spark-sql-kafka-0-10_2.12-3.3.0.jar -P ${SPARK_HOME}/jars/
 
-COPY start-master.sh /start-master.sh
-COPY start-worker.sh /start-worker.sh
+COPY docker/spark/start-master.sh /start-master.sh
+COPY docker/spark/start-worker.sh /start-worker.sh
 RUN chmod +x /start-master.sh /start-worker.sh
 
 CMD ["bash"]
