@@ -73,7 +73,7 @@ services:
     depends_on:
       - kafka
     environment:
-      - INTERFACE=eth0
+      - INTERFACE=enp0s25
       - KAFKA_BROKERS=kafka:9092
       - TOPIC=netflow-data
 
