@@ -17,7 +17,10 @@ RUN wget -q --timeout=10 --tries=1 https://github.com/ahlashkari/CICFlowMeter/re
     echo "CICFlowMeter.jar not available - will continue without it" || true
 
 # install Python
-RUN pip3 install --break-system-packages kafka-python pandas watchdog
+# upgrade pip then install needed packages without using the unsupported
+# `--break-system-packages` flag. Use --no-cache-dir to keep image smaller.
+RUN python3 -m pip install --upgrade pip setuptools wheel && \
+    pip3 install --no-cache-dir kafka-python pandas watchdog
 
 # copy scripts
 COPY capture.sh /capture.sh
