@@ -7,7 +7,7 @@ services:
     ports:
       - "9042:9042"
     environment:
-      CASSANDRA_AUTO_BOOTSTRAP: false
+      - CASSANDRA_AUTO_BOOTSTRAP=false
     volumes:
       - cassandra-data:/var/lib/cassandra
       - ./docker/cassandra/init.cql:/init.cql
