@@ -9,7 +9,6 @@ from cassandra.auth import PlainTextAuthProvider
 import pandas as pd
 from datetime import datetime
 
-# Helper: Convert IP string to integer
 def ip_to_int(ip):
     try:
         parts = ip.strip().split('.')
@@ -19,16 +18,22 @@ def ip_to_int(ip):
     except:
         return 0
 
-# Initialize Spark (just to show it's Spark context)
 spark = SparkSession.builder \
     .appName("LoadNetFlowToCassandra") \
     .config("spark.cassandra.connection.host", "cassandra") \
     .getOrCreate()
 
+# التعديل الصحيح هنا
 auth_provider = PlainTextAuthProvider(username='cassandra', password='cassandra')
-cluster = Cluster(['cassandra'], port=9042, auth_provider=auth_provider)
-
-session = cluster.connect(connect_timeout=30, request_timeout=60)
+cluster = Cluster(
+    contact_points=['cassandra'],
+    port=9042,
+    auth_provider=auth_provider,
+    connect_timeout=30,
+    request_timeout=60,
+    idle_heartbeat_interval=30
+)
+session = cluster.connect()
 
 session.execute("CREATE KEYSPACE IF NOT EXISTS netflow WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}")
 session.set_keyspace("netflow")
@@ -68,8 +73,8 @@ for i, chunk in enumerate(pd.read_csv(csv_path, chunksize=chunk_size)):
     
     for _, row in chunk.iterrows():
         try:
-            ts_str = str(row['Timestamp'])
-            timestamp = datetime.strptime(ts_str.split('.')[0], "%Y-%m-%d %H:%M:%S")
+            ts_str = str(row['Timestamp']).split('.')[0]
+            timestamp = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
         except:
             timestamp = datetime.now()
 
@@ -79,7 +84,7 @@ for i, chunk in enumerate(pd.read_csv(csv_path, chunksize=chunk_size)):
             ip_to_int(str(row.get('IPV4_DST_ADDR', '0.0.0.0'))),
             int(row.get('L4_SRC_PORT', 0)),
             int(row.get('L4_DST_PORT', 0)),
-            int(row.get('PROTOCOL', 6)),  # 6 = TCP default
+            int(row.get('PROTOCOL', 6)),
             int(row.get('IN_BYTES', 0)),
             int(row.get('OUT_BYTES', 0)),
             int(row.get('FLOW_DURATION_MILLISECONDS', 0)),
@@ -87,8 +92,8 @@ for i, chunk in enumerate(pd.read_csv(csv_path, chunksize=chunk_size)):
         ))
         total_rows += 1
         if total_rows % 5000 == 0:
-            print(f"   → Loaded {total_rows:,} rows so far...")
+            print(f"   Loaded {total_rows:,} rows...")
 
-print(f"All data successfully loaded! Total rows: {total_rows:,}")
+print(f"All data loaded successfully! Total: {total_rows:,} rows")
 cluster.shutdown()
 spark.stop()
