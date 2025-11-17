@@ -11,6 +11,7 @@ services:
     volumes:
       - cassandra-data:/var/lib/cassandra
       - ./docker/cassandra/init.cql:/init.cql
+      - ./docker/cassandra/cassandra.yaml:/etc/cassandra/cassandra.yaml  # ← AJOUTE ÇA
     command: ["bash", "-c", "cassandra -f & sleep 30 && until cqlsh -e 'describe cluster' > /dev/null 2>&1; do sleep 2; done && cqlsh -f /init.cql && wait"]
     user: "1000:1000"
 
