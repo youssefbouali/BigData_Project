@@ -1,11 +1,19 @@
-# docker/cassandra/Dockerfile
 FROM cassandra:4.1
 
-# Crée un utilisateur avec UID/GID 1000 (ton utilisateur local)
-RUN groupadd -g 1000 cassgroup && \
-    useradd -u 1000 -g cassgroup -m -s /bin/bash cassuser
+# Créer utilisateur + groupe avec ton UID/GID local
+ARG UID=1000
+ARG GID=1000
 
-# Change le propriétaire du répertoire de données
+RUN groupadd -g ${GID} cassgroup && \
+    useradd -u ${UID} -g ${GID} -m -s /bin/bash cassuser && \
+    mkdir -p /home/cassuser/.cassandra && \
+    chown -R cassuser:cassgroup /home/cassuser/.cassandra
+
+# Changer les droits sur les répertoires critiques
 RUN chown -R cassuser:cassgroup /var/lib/cassandra /var/log/cassandra
 
+# Passer en utilisateur non-root
 USER cassuser
+
+# Répertoire de travail
+WORKDIR /home/cassuser
