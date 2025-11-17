@@ -2,21 +2,30 @@ version: '3.8'
 
 services:
   cassandra:
-    build:
-      context: .
-      dockerfile: docker/cassandra/Dockerfile
+    image: cassandra:4.1
+    container_name: cassandra
+    hostname: cassandra
     ports:
       - "9042:9042"
     environment:
       - CASSANDRA_AUTO_BOOTSTRAP=false
+      - CASSANDRA_START_NATIVE_TRANSPORT=true
+      - CASSANDRA_NATIVE_TRANSPORT_PORT=9042
     volumes:
       - cassandra-data:/var/lib/cassandra
       - ./docker/cassandra/init.cql:/init.cql
-    healthcheck:
-      test: ["CMD", "cqlsh", "-e", "describe keyspaces"]
-      interval: 10s
-      timeout: 5s
-      retries: 20
+    command: >
+      bash -c "
+        cassandra -f &
+        echo 'Waiting for Cassandra to be ready...'
+        until cqlsh -e 'describe keyspaces' localhost 9042 >/dev/null 2>&1; do
+          sleep 3
+        done
+        echo 'Cassandra ready! Running init.cql...'
+        cqlsh -f /init.cql localhost 9042
+        echo 'Setup complete. Keeping container alive...'
+        tail -f /dev/null
+      "
 
 
   spark-master:
