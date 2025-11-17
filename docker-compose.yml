@@ -9,6 +9,7 @@ services:
       - cassandra-data:/var/lib/cassandra
       - ./docker/cassandra/init.cql:/init.cql
     command: ["bash", "-c", "cassandra -f & sleep 30 && until cqlsh -e 'describe cluster' > /dev/null 2>&1; do sleep 2; done && cqlsh -f /init.cql && wait"]
+    user: "1000:1000"
 
   spark-master:
     build:
