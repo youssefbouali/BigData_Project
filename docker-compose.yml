@@ -10,25 +10,20 @@ services:
     volumes:
       - cassandra-data:/var/lib/cassandra
       - ./docker/cassandra/init.cql:/init.cql
-      # SUPPRIME CETTE LIGNE :
-      # - ./docker/cassandra/cassandra.yaml:/etc/cassandra/cassandra.yaml
     command: >
       bash -c "
-        # Modifie cassandra.yaml en place
-        sed -i 's/listen_address: localhost/listen_address: 0.0.0.0/' /etc/cassandra/cassandra.yaml &&
-        sed -i 's/rpc_address: localhost/rpc_address: 0.0.0.0/' /etc/cassandra/cassandra.yaml &&
-        sed -i 's/# broadcast_address: .*/broadcast_address: cassandra/' /etc/cassandra/cassandra.yaml &&
-        sed -i 's/# broadcast_rpc_address: .*/broadcast_rpc_address: cassandra/' /etc/cassandra/cassandra.yaml &&
-        sed -i '/seed_provider/,/seeds:/ s/seeds: \"127.0.0.1\"/seeds: \"cassandra\"/' /etc/cassandra/cassandra.yaml &&
-  
+        echo 'Starting Cassandra...' &&
         cassandra -f &
-        echo 'Waiting for Cassandra...' &&
-        sleep 30 &&
+
+        echo 'Waiting for Cassandra to be ready...' &&
         until cqlsh cassandra 9042 -e 'describe cluster' > /dev/null 2>&1; do
-          sleep 2;
+          echo 'Cassandra not ready yet...'; sleep 5;
         done &&
+
         echo 'Cassandra ready → executing init.cql' &&
         cqlsh cassandra 9042 -f /init.cql &&
+
+        echo 'Setup complete. Keeping container alive...' &&
         tail -f /dev/null
       "
 
