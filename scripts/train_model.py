@@ -140,7 +140,7 @@ for col, imp in importance_list[:10]:
 # -------------------------------
 # 12. Save the trained model
 # -------------------------------
-model_output_path = "/models/anomaly_detection_model.spark"
+model_output_path = "/models/anomaly_detection_model_rf.spark"
 model.save(model_output_path)
 print(f"Model saved successfully → {model_output_path}")
 
