@@ -2,7 +2,10 @@ version: '3.8'
 
 services:
   cassandra:
-    image: cassandra:4.1
+    build:
+      context: .
+      dockerfile: docker/cassandra/Dockerfile   # <-- BUILD CUSTOM
+    #image: cassandra:4.1
     ports:
       - "9042:9042"
     volumes:
