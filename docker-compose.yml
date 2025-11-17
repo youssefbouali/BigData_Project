@@ -7,25 +7,16 @@ services:
       dockerfile: docker/cassandra/Dockerfile
     ports:
       - "9042:9042"
+    environment:
+      - CASSANDRA_AUTO_BOOTSTRAP=false
     volumes:
       - cassandra-data:/var/lib/cassandra
       - ./docker/cassandra/init.cql:/init.cql
-    command: >
-      bash -c "
-        echo 'Starting Cassandra...' &&
-        cassandra -f &
-
-        echo 'Waiting for Cassandra to be ready...' &&
-        until cqlsh cassandra 9042 -e 'describe cluster' > /dev/null 2>&1; do
-          echo 'Cassandra not ready yet...'; sleep 5;
-        done &&
-
-        echo 'Cassandra ready → executing init.cql' &&
-        cqlsh cassandra 9042 -f /init.cql &&
-
-        echo 'Setup complete. Keeping container alive...' &&
-        tail -f /dev/null
-      "
+    healthcheck:
+      test: ["CMD", "cqlsh", "-e", "describe keyspaces"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
 
 
   spark-master:
