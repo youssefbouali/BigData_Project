@@ -1,31 +1,17 @@
 version: '3.8'
 
 services:
-  cassandra:
+    cassandra:
     image: cassandra:4.1
     container_name: cassandra
-    hostname: cassandra
     ports:
       - "9042:9042"
     environment:
-      - CASSANDRA_AUTO_BOOTSTRAP=false
-      - CASSANDRA_START_NATIVE_TRANSPORT=true
-      - CASSANDRA_NATIVE_TRANSPORT_PORT=9042
+      CASSANDRA_AUTO_BOOTSTRAP: false
     volumes:
       - cassandra-data:/var/lib/cassandra
       - ./docker/cassandra/init.cql:/init.cql
-    command: >
-      bash -c "
-        cassandra -f &
-        echo 'Waiting for Cassandra to be ready...'
-        until cqlsh -e 'describe keyspaces' localhost 9042 >/dev/null 2>&1; do
-          sleep 3
-        done
-        echo 'Cassandra ready! Running init.cql...'
-        cqlsh -f /init.cql localhost 9042
-        echo 'Setup complete. Keeping container alive...'
-        tail -f /dev/null
-      "
+    command: cassandra -f -R
 
 
   spark-master:
