@@ -8,7 +8,6 @@ services:
       - "9042:9042"
     environment:
       - CASSANDRA_AUTO_BOOTSTRAP=false
-      - CASSANDRA_LISTEN_ADDRESS=0.0.0.0
       - CASSANDRA_RPC_ADDRESS=0.0.0.0
       - CASSANDRA_BROADCAST_ADDRESS=cassandra
       - CASSANDRA_SEEDS=cassandra
