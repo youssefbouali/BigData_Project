@@ -9,24 +9,18 @@ services:
       - "9042:9042"
     environment:
       - CASSANDRA_AUTO_BOOTSTRAP=false
+      - CASSANDRA_CLUSTER_NAME=NetFlow Cluster
       - CASSANDRA_LISTEN_ADDRESS=cassandra
-      - CASSANDLA_RPC_ADDRESS=0.0.0.0
       - CASSANDRA_BROADCAST_ADDRESS=cassandra
-      - CASSANDRA_BROADCAST_RPC_ADDRESS=cassandra
+      - CASSANDRA_RPC_ADDRESS=cassandra
       - CASSANDRA_SEEDS=cassandra
+      - CASSANDRA_ENDPOINT_SNITCH=SimpleSnitch
+      - CASSANDRA_DC=datacenter1
+      - CASSANDRA_RACK=rack1
     volumes:
       - cassandra-data:/var/lib/cassandra
       - ./docker/cassandra/init.cql:/init.cql
-    command: >
-      bash -c "
-        echo 'Configuring Cassandra...' &&
-        sed -i 's/listen_address:.*/listen_address: cassandra/' /etc/cassandra/cassandra.yaml &&
-        sed -i 's/broadcast_address:.*/broadcast_address: cassandra/' /etc/cassandra/cassandra.yaml &&
-        sed -i 's/rpc_address:.*/rpc_address: 0.0.0.0/' /etc/cassandra/cassandra.yaml &&
-        sed -i 's/broadcast_rpc_address:.*/broadcast_rpc_address: cassandra/' /etc/cassandra/cassandra.yaml ||
-        echo 'broadcast_rpc_address: cassandra' >> /etc/cassandra/cassandra.yaml &&
-        echo 'Starting Cassandra...' &&
-        cassandra -f -R"
+    command: cassandra -f -R
 
 
   spark-master:
