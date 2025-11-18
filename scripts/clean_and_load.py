@@ -7,7 +7,6 @@ from pyspark.sql import SparkSession
 
 from cassandra.cluster import Cluster
 from cassandra.auth import PlainTextAuthProvider
-from cassandra.policies import DCAwareRoundRobinPolicy, TokenAwarePolicy, ConstantReconnectionPolicy
 
 import pandas as pd
 from datetime import datetime
@@ -27,17 +26,15 @@ spark = SparkSession.builder \
     .getOrCreate()
 
 
+
 auth_provider = PlainTextAuthProvider(username='cassandra', password='cassandra')
 
 cluster = Cluster(
     contact_points=['cassandra'],
     port=9042,
     auth_provider=auth_provider,
-    connect_timeout=30.0,
-    load_balancing_policy=TokenAwarePolicy(DCAwareRoundRobinPolicy()),
-    reconnection_policy=ConstantReconnectionPolicy(delay=5, max_attempts=10),
-    default_timeout=60.0,
-    control_connection_timeout=30.0,
+    connect_timeout=30,
+    control_connection_timeout=30,
     idle_heartbeat_interval=30
 )
 
