@@ -16,14 +16,8 @@ services:
     volumes:
       - cassandra-data:/var/lib/cassandra
       - ./docker/cassandra/init.cql:/init.cql
-    command: >
-      bash -c "
-        echo 'Configuring Cassandra...' &&
-        sed -i 's/listen_address:.*/listen_address: cassandra/' /etc/cassandra/cassandra.yaml &&
-        sed -i 's/broadcast_address:.*/broadcast_address: cassandra/' /etc/cassandra/cassandra.yaml &&
-        sed -i 's/rpc_address:.*/rpc_address: 0.0.0.0/' /etc/cassandra/cassandra.yaml &&
-        echo 'Starting Cassandra...' &&
-        cassandra -f -R"
+      - ./docker/cassandra/cassandra.yaml:/etc/cassandra/cassandra.yaml
+    command: cassandra -f -R
 
 
   spark-master:

@@ -1,0 +1,7 @@
+# docker/cassandra/cassandra.yaml
+listen_address: 0.0.0.0
+rpc_address: 0.0.0.0
+broadcast_address: cassandra
+broadcast_rpc_address: cassandra
+native_transport_port: 9042
+start_native_transport: true
