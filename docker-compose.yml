@@ -12,12 +12,21 @@ services:
       - CASSANDRA_LISTEN_ADDRESS=cassandra
       - CASSANDLA_RPC_ADDRESS=0.0.0.0
       - CASSANDRA_BROADCAST_ADDRESS=cassandra
+      - CASSANDRA_BROADCAST_RPC_ADDRESS=cassandra
       - CASSANDRA_SEEDS=cassandra
     volumes:
       - cassandra-data:/var/lib/cassandra
       - ./docker/cassandra/init.cql:/init.cql
-      - ./docker/cassandra/cassandra.yaml:/etc/cassandra/cassandra.yaml
-    command: cassandra -f -R
+    command: >
+      bash -c "
+        echo 'Configuring Cassandra...' &&
+        sed -i 's/listen_address:.*/listen_address: cassandra/' /etc/cassandra/cassandra.yaml &&
+        sed -i 's/broadcast_address:.*/broadcast_address: cassandra/' /etc/cassandra/cassandra.yaml &&
+        sed -i 's/rpc_address:.*/rpc_address: 0.0.0.0/' /etc/cassandra/cassandra.yaml &&
+        sed -i 's/broadcast_rpc_address:.*/broadcast_rpc_address: cassandra/' /etc/cassandra/cassandra.yaml ||
+        echo 'broadcast_rpc_address: cassandra' >> /etc/cassandra/cassandra.yaml &&
+        echo 'Starting Cassandra...' &&
+        cassandra -f -R"
 
 
   spark-master:
