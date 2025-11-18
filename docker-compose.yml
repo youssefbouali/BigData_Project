@@ -4,17 +4,26 @@ services:
   cassandra:
     image: cassandra:4.1
     container_name: cassandra
+    hostname: cassandra
     ports:
       - "9042:9042"
     environment:
       - CASSANDRA_AUTO_BOOTSTRAP=false
-      - CASSANDRA_RPC_ADDRESS=0.0.0.0
+      - CASSANDRA_LISTEN_ADDRESS=cassandra
+      - CASSANDLA_RPC_ADDRESS=0.0.0.0
       - CASSANDRA_BROADCAST_ADDRESS=cassandra
       - CASSANDRA_SEEDS=cassandra
     volumes:
       - cassandra-data:/var/lib/cassandra
       - ./docker/cassandra/init.cql:/init.cql
-    command: cassandra -f -R
+    command: >
+      bash -c "
+        echo 'Configuring Cassandra...' &&
+        sed -i 's/listen_address:.*/listen_address: cassandra/' /etc/cassandra/cassandra.yaml &&
+        sed -i 's/broadcast_address:.*/broadcast_address: cassandra/' /etc/cassandra/cassandra.yaml &&
+        sed -i 's/rpc_address:.*/rpc_address: 0.0.0.0/' /etc/cassandra/cassandra.yaml &&
+        echo 'Starting Cassandra...' &&
+        cassandra -f -R"
 
 
   spark-master:
