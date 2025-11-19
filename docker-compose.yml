@@ -52,6 +52,9 @@ services:
     command: /start-worker.sh spark://spark-master:7077
     depends_on:
       - spark-master
+    volumes:
+      - ./scripts:/scripts
+      - ./data:/data
     networks:
       - default
 
