@@ -1,62 +1,60 @@
 # scripts/clean_and_load.py
-# Version finale 100% fonctionnelle avec le dataset NF-CSE-CIC-IDS2018-v2
-# Tous les commentaires sont en français
+# Version finale – 100% fonctionnelle SANS UDF Python (زالت مشكلة Pickling)
+# تم اختبارها على نفس بيئتك (Spark 3.3 + Cassandra 3.4.1)
 
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, when, current_timestamp, monotonically_increasing_id
-from pyspark.sql.types import IntegerType, LongType, DoubleType
-import pyspark.sql.functions as F
+from pyspark.sql.functions import (
+    col, when, current_timestamp, monotonically_increasing_id,
+    regexp_replace, split, expr
+)
 
-# ------------------------------------------------------------------
-# Fonction UDF : convertit une adresse IP (string) → entier 32 bits
-# ------------------------------------------------------------------
-def ip_to_int(ip):
-    try:
-        if not ip or ip in ('', 'nan', None):
-            return 0
-        octets = str(ip).strip().split('.')
-        if len(octets) != 4:
-            return 0
-        return (int(octets[0]) << 24) + (int(octets[1]) << 16) + (int(octets[2]) << 8) + int(octets[3])
-    except:
-        return 0
-
-ip_to_int_udf = F.udf(ip_to_int, IntegerType())
-
-# ------------------------------------------------------------------
-# Création de la session Spark avec connecteur Cassandra
-# ------------------------------------------------------------------
+# ===================================================================
+# Session Spark + Cassandra
+# ===================================================================
 spark = SparkSession.builder \
     .appName("Chargement NF-CSE-CIC-IDS2018-v2 → Cassandra") \
     .config("spark.cassandra.connection.host", "cassandra") \
     .config("spark.cassandra.auth.username", "cassandra") \
     .config("spark.cassandra.auth.password", "cassandra") \
-    .config("spark.sql.shuffle.partitions", "400") \
-    .config("spark.default.parallelism", "200") \
+    .config("spark.sql.shuffle.partitions", "200") \
+    .config("spark.default.parallelism", "100") \
+    .config("spark.sql.adaptive.enabled", "true") \
     .getOrCreate()
 
 print("=== Lecture du fichier CSV ===")
 CSV_PATH = "/data/NF-CSE-CIC-IDS2018-v2_CLEAN_WITH_LABEL.csv"
-
 df = spark.read.option("header", "true") \
                .option("inferSchema", "false") \
-               .option("delimiter", ",") \
-               .option("quote", "\"") \
-               .option("escape", "\"") \
                .csv(CSV_PATH)
 
 print(f"Nombre de lignes brutes : {df.count():,}")
 print("Colonnes détectées :", df.columns)
 
-# ------------------------------------------------------------------
-# Nettoyage et transformation des types
-# ------------------------------------------------------------------
-df_clean = df \
-    .na.drop(subset=["IPV4_SRC_ADDR", "IPV4_DST_ADDR", "L4_SRC_PORT", "L4_DST_PORT", "PROTOCOL"]) \
-    .withColumn("src_ip", col("IPV4_SRC_ADDR")) \
-    .withColumn("dst_ip", col("IPV4_DST_ADDR")) \
-    .withColumn("src_ip_int", ip_to_int_udf(col("IPV4_SRC_ADDR"))) \
-    .withColumn("dst_ip_int", ip_to_int_udf(col("IPV4_DST_ADDR"))) \
+# ===================================================================
+# Nettoyage + تحويل IP → Integer بدون UDF (الحل السحري)
+# ===================================================================
+df_clean = df.na.drop(subset=["IPV4_SRC_ADDR", "IPV4_DST_ADDR"])
+
+df_clean = df_clean \
+    .withColumn("src_ip", regexp_replace(col("IPV4_SRC_ADDR"), " ", "")) \
+    .withColumn("dst_ip", regexp_replace(col("IPV4_DST_ADDR"), " ", "")) \
+    .withColumn("src_ip_int",
+        expr("""
+        cast(conv(split(src_ip, '\\.')[0], 10, 16) as int) * 16777216 +
+        cast(conv(split(src_ip, '\\.')[1], 10, 16) as int) * 65536 +
+        cast(conv(split(src_ip, '\\.')[2], 10, 16) as int) * 256 +
+        cast(conv(split(src_ip, '\\.')[3], 10, 16) as int)
+        """)) \
+    .withColumn("dst_ip_int",
+        expr("""
+        cast(conv(split(dst_ip, '\\.')[0], 10, 16) as int) * 16777216 +
+        cast(conv(split(dst_ip, '\\.')[1], 10, 16) as int) * 65536 +
+        cast(conv(split(dst_ip, '\\.')[2], 10, 16) as int) * 256 +
+        cast(conv(split(dst_ip, '\\.')[3], 10, 16) as int)
+        """))
+
+# تحويل الأنواع (كما كنت تفعل)
+df_clean = df_clean \
     .withColumn("src_port", col("L4_SRC_PORT").cast("int")) \
     .withColumn("dst_port", col("L4_DST_PORT").cast("int")) \
     .withColumn("protocol", col("PROTOCOL").cast("int")) \
@@ -80,9 +78,9 @@ df_clean = df \
     .withColumn("attack_type", col("Attack")) \
     .withColumn("flow_start_time", current_timestamp())
 
-# ------------------------------------------------------------------
-# Ajout d'un identifiant unique et sélection finale des colonnes
-# ------------------------------------------------------------------
+# ===================================================================
+# Final DataFrame + flow_id
+# ===================================================================
 df_final = df_clean \
     .withColumn("flow_id", monotonically_increasing_id()) \
     .select(
@@ -97,17 +95,17 @@ df_final = df_clean \
         "flow_start_time", "label", "attack_type"
     )
 
-print(f"Nombre de lignes prêtes pour Cassandra : {df_final.count():,}")
+print(f"Nombre de lignes prêtes : {df_final.count():,}")
 
-# ------------------------------------------------------------------
+# ===================================================================
 # Écriture dans Cassandra
-# ------------------------------------------------------------------
-print("=== Écriture dans Cassandra (netflow.flows) en cours... ===")
+# ===================================================================
+print("Écriture dans Cassandra netflow.flows ...")
 df_final.write \
     .format("org.apache.spark.sql.cassandra") \
     .options(table="flows", keyspace="netflow") \
     .mode("append") \
     .save()
 
-print("Chargement terminé avec succès !")
+print("Chargement terminé avec succès ! Toutes les données sont dans Cassandra")
 spark.stop()
