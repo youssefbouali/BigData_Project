@@ -1,9 +1,5 @@
 version: '3.8'
 
-networks:
-  bigdata:
-
-
 services:
   cassandra:
     image: cassandra:4.1
@@ -24,18 +20,7 @@ services:
     volumes:
       - cassandra-data:/var/lib/cassandra
       - ./docker/cassandra/init.cql:/init.cql
-    
-    command: >
-        bash -c "
-        cassandra -f -R &
-        echo 'Waiting for Cassandra to start...'
-        sleep 30
-        cqlsh -f /init.cql
-        fg %1
-        "
-    networks:
-      - bigdata
-
+    command: cassandra -f -R
 
 
   spark-master:
@@ -50,12 +35,6 @@ services:
       - ./scripts:/scripts
       - ./data:/data
       - ./model:/model
-    environment:
-      - SPARK_MASTER_HOST=spark-master
-      - SPARK_MASTER_PORT=7077
-    networks:
-      - bigdata
-
 
   spark-worker:
     build:
@@ -64,10 +43,6 @@ services:
     command: /start-worker.sh spark://spark-master:7077
     depends_on:
       - spark-master
-    environment:
-      - SPARK_WORKER_HOST=spark-worker
-    networks:
-      - bigdata
 
   spark-submit:
     build:
@@ -81,8 +56,6 @@ services:
       - ./scripts:/scripts
       - ./data:/data
       - ./model:/model
-    networks:
-      - bigdata
 
   zookeeper:
     image: confluentinc/cp-zookeeper:6.2.1
@@ -90,8 +63,6 @@ services:
       ZOOKEEPER_CLIENT_PORT: 2181
     ports:
       - "2181:2181"
-    networks:
-      - bigdata
 
   kafka:
     image: confluentinc/cp-kafka:6.2.1
@@ -104,8 +75,6 @@ services:
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-    networks:
-      - bigdata
 
 
 
@@ -113,7 +82,7 @@ services:
     build:
       context: ./docker/capture
     privileged: true
-    #network_mode: host
+    network_mode: host
     volumes:
       - ./data/pcap:/pcap
       - ./data/flows:/flows
@@ -124,8 +93,6 @@ services:
       - INTERFACE=enp0s25
       - KAFKA_BROKERS=kafka:9092
       - TOPIC=netflow-data
-    networks:
-      - bigdata
 
 volumes:
   cassandra-data:
