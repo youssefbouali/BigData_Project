@@ -4,7 +4,7 @@
 
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
-    col, when, current_timestamp, monotonically_increasing_id,
+    col, when, trim, current_timestamp, monotonically_increasing_id,
     regexp_replace, split, expr
 )
 
