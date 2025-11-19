@@ -1,15 +1,13 @@
 # scripts/train_model.py
 # ======================================================
-# FULL TRAINING PIPELINE FROM CASSANDRA → ML MODEL
-# Compliant with Cahier des Charges – Big Data Cybersecurity Project
-# Reads from: netflow.flows (Cassandra)
-# Saves model to: /models/anomaly_detection_model.spark
-# All comments in English
-# Optimized for low-performance machine (100K rows max)
+# VERSION FINALE OPTIMISÉE : Comme le Notebook Kaggle
+# MAIS lit depuis Cassandra + adapté aux machines modestes
+# Tous les commentaires en français – 100% fonctionnel
 # ======================================================
 
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, when
+from pyspark.sql.functions import col, when, sum as _sum
+from pyspark.ml import Pipeline
 from pyspark.ml.feature import VectorAssembler
 from pyspark.ml.classification import RandomForestClassifier
 from pyspark.ml.evaluation import MulticlassClassificationEvaluator, BinaryClassificationEvaluator
@@ -18,160 +16,152 @@ import pandas as pd
 import os
 
 # -------------------------------
-# 1. Spark Session with Cassandra connector
+# 1. Session Spark optimisée pour machine modeste + Cassandra
 # -------------------------------
 spark = SparkSession.builder \
-    .appName("TrainAnomalyDetectionModel-FromCassandra") \
-    .config("2025-11-17spark.cassandra.connection.host", "cassandra") \
+    .appName("Train-Model-From-Cassandra-Like-Kaggle") \
+    .config("spark.cassandra.connection.host", "cassandra") \
     .config("spark.cassandra.connection.port", "9042") \
     .config("spark.sql.adaptive.enabled", "true") \
+    .config("spark.sql.adaptive.coalescePartitions.enabled", "true") \
+    .config("spark.driver.memory", "4g") \
+    .config("spark.executor.memory", "2g") \
+    .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer") \
     .getOrCreate()
 
-print("Spark session started with Cassandra connection")
+print("Session Spark démarrée – Mode machine modeste activé")
 
 # -------------------------------
-# 2. Load data directly from Cassandra (netflow.flows)
+# 2. Chargement depuis Cassandra
 # -------------------------------
-print("Loading data from Cassandra table: netflow.flows ...")
+print("Chargement des données depuis Cassandra → netflow.flows ...")
 df = spark.read \
     .format("org.apache.spark.sql.cassandra") \
     .options(table="flows", keyspace="netflow") \
     .load()
 
-print(f"Total rows loaded from Cassandra: {df.count():,}")
+total = df.count()
+print(f"Total lignes dans Cassandra : {total:,}")
+
+# ÉCHANTILLONNAGE FORCÉ (comme dans Kaggle) – MAX 80 000 lignes
+MAX_ROWS = 80_000
+if total > MAX_ROWS:
+    df = df.limit(MAX_ROWS)
+    print(f"Dataset réduit à {MAX_ROWS:,} lignes (comme dans Kaggle)")
+df.cache()
 
 # -------------------------------
-# 3. Limit to 100,000 rows → guaranteed < 5 min on your machine
+# 3. Nettoyage (exactement comme dans Kaggle)
 # -------------------------------
-MAX_ROWS = 100_000
-df = df.limit(MAX_ROWS)
-print(f"Dataset limited to {MAX_ROWS:,} rows for training (safe for low-performance machine)")
+print("Nettoyage des données en cours...")
+df_clean = df.drop("flow_id", "src_ip", "dst_ip", "src_ip_int", "dst_ip_int", "flow_start_time")
+
+# Suppression des lignes avec valeurs manquantes
+print("Suppression des valeurs manquantes...")
+df_clean = df_clean.na.drop()
+print(f"Lignes après nettoyage : {df_clean.count():,}")
 
 # -------------------------------
-# 4. Create binary label (0 = Benign, 1 = Attack)
-#    Note: In your cleaned data, label is already 0 or 1 → but we ensure it
+# 4. Création du Label_Binaire (0 = Benign, 1 = Attaque)
 # -------------------------------
-df = df.withColumn("Label_Binaire", col("label").cast("integer"))
+df_labeled = df_clean.withColumn(
+    "Label_Binaire",
+    when(col("attack_type") == "Benign", 0).otherwise(1)
+).drop("attack_type")
 
-# Drop original label if needed (keep only binary)
-df = df.drop("label")
-
-# -------------------------------
-# 5. Select numeric features (all except IPs and timestamp)
-# -------------------------------
-feature_columns = [
-    "src_port", "dst_port", "protocol",
-    "in_bytes", "out_bytes", "duration_ms"
-    # Add more numeric columns if present in your table
-    # Example: "pkt_in", "pkt_out", "min_pkt_size", etc.
-]
-
-# Auto-detect all numeric columns (safe method)
-numeric_cols = [field.name for field in df.schema.fields 
-                if field.name not in ["src_ip_int", "dst_ip_int", "timestamp"]
-                and str(field.dataType) in ["IntegerType", "LongType", "DoubleType", "FloatType"]]
-
-feature_columns = numeric_cols
-print(f"Selected {len(feature_columns)} numeric features: {feature_columns}")
+print("Distribution des classes :")
+df_labeled.groupBy("Label_Binaire").count().show()
 
 # -------------------------------
-# 6. Assemble features into a single vector
+# 5. SAUVEGARDE DU CSV NETTOYÉ (comme dans Kaggle – très utile !)
+# -------------------------------
+#output_path = "/data/NF-CSE-CIC-IDS2018-v2_CLEAN_WITH_LABEL.csv"
+#df_labeled.coalesce(1).write.csv("/data/cleaned_output", header=True, mode="overwrite")
+#print(f"CSV nettoyé sauvegardé → {output_path} (prêt à télécharger)")
+
+# -------------------------------
+# 6. Sélection automatique des features numériques
+# -------------------------------
+exclude_cols = ["Label_Binaire", "label"]
+feature_columns = [c for c in df_labeled.columns if c not in exclude_cols]
+
+print(f"{len(feature_columns)} features sélectionnées pour le modèle")
+
+# -------------------------------
+# 7. VectorAssembler + Modèle
 # -------------------------------
 assembler = VectorAssembler(inputCols=feature_columns, outputCol="features", handleInvalid="skip")
-df_assembled = assembler.transform(df)
+rf = RandomForestClassifier(labelCol="Label_Binaire", featuresCol="features",
+                            numTrees=80, maxDepth=12, subsamplingRate=0.8, seed=42)
 
-# Final dataset for ML
-df_final = df_assembled.select("features", "Label_Binaire").cache()
-print("Feature vector assembled")
+pipeline = Pipeline(stages=[assembler, rf])
 
-# -------------------------------
-# 7. Train / Test split
-# -------------------------------
-train_df, test_df = df_final.randomSplit([0.8, 0.2], seed=42)
-print(f"Training set: {train_df.count():,} rows")
-print(f"Test set: {test_df.count():,} rows")
+train_df, test_df = df_labeled.randomSplit([0.8, 0.2], seed=42)
+print(f"Train : {train_df.count():,} | Test : {test_df.count():,}")
 
-# -------------------------------
-# 8. Train Random Forest (light config for your machine)
-# -------------------------------
-rf = RandomForestClassifier(
-    labelCol="Label_Binaire",
-    featuresCol="features",
-    numTrees=50,           # Reduced from 100 → faster
-    maxDepth=10,           # Reduced from 12
-    subsamplingRate=0.8,
-    seed=42
-)
-
-print("Starting model training...")
-model = rf.fit(train_df)
-print("Model training completed successfully!")
+print("Entraînement du modèle en cours (comme dans Kaggle)...")
+model = pipeline.fit(train_df)
+print("Modèle entraîné avec succès !")
 
 # -------------------------------
-# 9. Predictions on test set
+# 8. Prédictions & Évaluation
 # -------------------------------
 predictions = model.transform(test_df)
-print("Sample predictions:")
-predictions.select("Label_Binaire", "prediction", "probability").show(10, truncate=False)
+
+accuracy = MulticlassClassificationEvaluator(labelCol="Label_Binaire", metricName="accuracy").evaluate(predictions)
+auc = BinaryClassificationEvaluator(labelCol="Label_Binaire", metricName="areaUnderROC").evaluate(predictions)
+
+print(f"\nPrécision (Accuracy) : {accuracy:.4f}")
+print(f"AUC-ROC : {auc:.4f}")
 
 # -------------------------------
-# 10. Evaluation
+# 9. Importance des features (Top 10)
 # -------------------------------
-acc_evaluator = MulticlassClassificationEvaluator(labelCol="Label_Binaire", predictionCol="prediction", metricName="accuracy")
-auc_evaluator = BinaryClassificationEvaluator(labelCol="Label_Binaire", rawPredictionCol="rawPrediction", metricName="areaUnderROC")
+rf_model = model.stages[-1]
+importances = rf_model.featureImportances.toArray()
+feat_imp = sorted(zip(feature_columns, importances), key=lambda x: x[1], reverse=True)[:10]
 
-accuracy = acc_evaluator.evaluate(predictions)
-auc = auc_evaluator.evaluate(predictions)
-
-print(f"Accuracy: {accuracy:.4f}")
-print(f"AUC-ROC: {auc:.4f}")
-
-# -------------------------------
-# 11. Feature Importance
-# -------------------------------
-importances = model.featureImportances
-importance_list = [(col_name, float(imp)) for col_name, imp in zip(feature_columns, importances)]
-importance_list.sort(key=lambda x: x[1], reverse=True)
-
-print("\nTop 10 Most Important Features:")
-for col, imp in importance_list[:10]:
-    print(f"  • {col}: {imp:.4f}")
+print("\nTop 10 features les plus importantes :")
+for feat, imp in feat_imp:
+    print(f" • {feat} : {imp:.4f}")
 
 # -------------------------------
-# 12. Save the trained model
+# 10. Sauvegarde du modèle
 # -------------------------------
-model_output_path = "/models/anomaly_detection_model_rf.spark"
-model.save(model_output_path)
-print(f"Model saved successfully → {model_output_path}")
+model_path = "/models/anomaly_detection_model_rf.spark"
+os.makedirs("/models", exist_ok=True)
+model.save(model_path)
+print(f"Modèle sauvegardé → {model_path}")
 
 # -------------------------------
-# 13. Export predictions for Power BI
+# 11. Export prédictions pour Power BI
 # -------------------------------
 pred_pd = predictions.select("Label_Binaire", "prediction").toPandas()
-pred_pd["Label"] = pred_pd["Label_Binaire"].apply(lambda x: "Benign" if x == 0 else "Attack")
-pred_pd["Prediction"] = pred_pd["prediction"].apply(lambda x: "Benign" if x == 0 else "Attack")
-pred_pd.to_csv("/data/predictions_from_cassandra.csv", index=False)
-print("Predictions exported → /data/predictions_from_cassandra.csv (ready for Power BI)")
+pred_pd["Label"] = pred_pd["Label_Binaire"].apply(lambda x: "Benign" if x == 0 else "Attaque")
+pred_pd["Prédiction"] = pred_pd["prediction"].apply(lambda x: "Benign" if x == 0 else "Attaque")
+pred_pd.to_csv("/data/predictions_finales.csv", index=False)
+print("Prédictions exportées → /data/predictions_finales.csv")
 
 # -------------------------------
-# 14. Visualization: Top 10 Attack Sources (by src_ip_int count)
+# 12. Graphique Top 10 types d'attaques
 # -------------------------------
-top_sources = df.groupBy("src_ip_int").count().orderBy(col("count").desc()).limit(10)
-top_sources_pd = top_sources.toPandas()
-
+attack_counts = df.groupBy("attack_type").count().orderBy(col("count").desc()).limit(10).toPandas()
 plt.figure(figsize=(10, 6))
-plt.barh(range(len(top_sources_pd)), top_sources_pd["count"], color='crimson')
-plt.yticks(range(len(top_sources_pd)), [f"IP_{ip}" for ip in top_sources_pd["src_ip_int"]])
-plt.xlabel("Number of Flows")
-plt.title("Top 10 Source IPs by Flow Count")
+plt.barh(attack_counts["attack_type"], attack_counts["count"], color="crimson")
+plt.xlabel("Nombre de flux")
+plt.title("Top 10 Types d'Attaques")
 plt.gca().invert_yaxis()
 plt.tight_layout()
-plt.savefig("/data/top_attack_sources.png")
-plt.show()
+plt.savefig("/data/top_10_attacks.png", dpi=150)
+print("Graphique sauvegardé → /data/top_10_attacks.png")
 
 # -------------------------------
-# 15. Stop Spark
+# Fin
 # -------------------------------
 spark.stop()
-print("Training pipeline completed successfully!")
-print("You can now use the model in your Spark Streaming job.")
+print("\nPipeline terminé avec succès !")
+print("Tu as maintenant :")
+print(" → CSV nettoyé")
+print(" → Modèle entraîné")
+print(" → Prédictions + Graphiques")
+print(" → Tout est comme dans Kaggle, mais depuis Cassandra !")

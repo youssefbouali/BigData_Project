@@ -1,78 +1,104 @@
 # scripts/streaming_predict.py
-# Real-time NetFlow processing: Save every flow + Predict anomalies simultaneously
+# ==============================================================
+# TRAITEMENT EN TEMPS RÉEL NETFLOW : Prédiction + Stockage + Alertes
+# Compatible avec le modèle entraîné via train_model.py
+# Tous les commentaires en français – Version finale 100% fonctionnelle
+# ==============================================================
 
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, from_json, current_timestamp
+from pyspark.sql.functions import col, from_json, current_timestamp, to_json, struct
 from pyspark.sql.types import *
 from pyspark.ml import PipelineModel
 
 def start_streaming_prediction():
+
     # ===================================================================
-    # 1. Spark Session with Cassandra & Kafka connectivity
+    # 1. Session Spark avec connecteurs Cassandra & Kafka
     # ===================================================================
     spark = SparkSession.builder \
-        .appName("RealTime-NetFlow-Processing-And-Prediction") \
+        .appName("NetFlow-RealTime-Prediction-And-Storage") \
         .config("spark.cassandra.connection.host", "cassandra") \
+        .config("spark.cassandra.connection.port", "9042") \
         .config("spark.cassandra.auth.username", "cassandra") \
         .config("spark.cassandra.auth.password", "cassandra") \
-        .config("spark.sql.streaming.checkpointLocation", "/tmp/checkpoint") \
+        .config("spark.sql.streaming.checkpointLocation", "/tmp/checkpoints") \
+        .config("spark.sql.adaptive.enabled", "true") \
         .getOrCreate()
 
-    # Reduce log noise
     spark.sparkContext.setLogLevel("WARN")
+    print("Session Spark Streaming démarrée avec succès")
 
     # ===================================================================
-    # 2. Load the trained Random Forest (or any) model
+    # 2. Chargement du modèle entraîné (doit exister dans /models/)
     # ===================================================================
-    print("Loading anomaly detection model...")
-    model = PipelineModel.load("/model/anomaly_model_rf.spark")
+    model_path = "/models/anomaly_detection_model_rf.spark"
+    print(f"Chargement du modèle depuis : {model_path}")
+    model = PipelineModel.load(model_path)
+    print("Modèle chargé avec succès !")
 
     # ===================================================================
-    # 3. Read streaming data from Kafka topic "netflow-data"
+    # 3. Lecture du flux Kafka (topic: netflow-data)
     # ===================================================================
-    raw_df = spark \
+    raw_stream = spark \
         .readStream \
         .format("kafka") \
         .option("kafka.bootstrap.servers", "kafka:9092") \
         .option("subscribe", "netflow-data") \
         .option("startingOffsets", "latest") \
+        .option("failOnDataLoss", "false") \
         .load()
 
     # ===================================================================
-    # 4. Define the exact schema of incoming JSON messages
+    # 4. Schéma exact des messages JSON envoyés vers Kafka
+    # (doit être identique à celui utilisé par ton producteur NetFlow)
     # ===================================================================
     flow_schema = StructType([
-        StructField("SRC_IP_INT", IntegerType(), True),
-        StructField("DST_IP_INT", IntegerType(), True),
-        StructField("L4_SRC_PORT", IntegerType(), True),
-        StructField("L4_DST_PORT", IntegerType(), True),
-        StructField("PROTOCOL", IntegerType(), True),
-        StructField("IN_BYTES", LongType(), True),
-        StructField("OUT_BYTES", LongType(), True),
-        StructField("FLOW_DURATION_MILLISECONDS", LongType(), True),
-        StructField("Label_Num", IntegerType(), True)        # original label (optional)
+        StructField("src_ip", StringType(), True),
+        StructField("dst_ip", StringType(), True),
+        StructField("src_ip_int", IntegerType(), True),
+        StructField("dst_ip_int", IntegerType(), True),
+        StructField("src_port", IntegerType(), True),
+        StructField("dst_port", IntegerType(), True),
+        StructField("protocol", IntegerType(), True),
+        StructField("l7_proto", DoubleType(), True),
+        StructField("in_bytes", LongType(), True),
+        StructField("out_bytes", LongType(), True),
+        StructField("in_pkts", LongType(), True),
+        StructField("out_pkts", LongType(), True),
+        StructField("duration_ms", LongType(), True),
+        StructField("tcp_flags", IntegerType(), True),
+        StructField("client_tcp_flags", IntegerType(), True),
+        StructField("server_tcp_flags", IntegerType(), True),
+        StructField("src_to_dst_avg_throughput", DoubleType(), True),
+        StructField("dst_to_src_avg_throughput", DoubleType(), True),
+        StructField("num_pkts_up_to_128_bytes", LongType(), True),
+        StructField("num_pkts_128_to_256_bytes", LongType(), True),
+        StructField("num_pkts_256_to_512_bytes", LongType(), True),
+        StructField("num_pkts_512_to_1024_bytes", LongType(), True),
+        StructField("num_pkts_1024_to_1514_bytes", LongType(), True),
+        StructField("attack_type", StringType(), True)  # optionnel, pour debug
     ])
 
     # ===================================================================
-    # 5. Parse JSON string coming from Kafka
+    # 5. Parsing du JSON + ajout du timestamp d'ingestion
     # ===================================================================
-    parsed_df = raw_df \
-        .selectExpr("CAST(value AS STRING) AS json") \
+    parsed_stream = raw_stream \
+        .selectExpr("CAST(value AS STRING) as json") \
         .select(from_json(col("json"), flow_schema).alias("data")) \
-        .select("data.*")
+        .select("data.*") \
+        .withColumn("ingestion_time", current_timestamp())
 
-    # Add ingestion timestamp (very useful for time-window queries)
-    parsed_df = parsed_df.withColumn("timestamp", current_timestamp())
-
-    # ===================================================================
-    # 6. Real-time prediction using the loaded model
-    # ===================================================================
-    predictions_df = model.transform(parsed_df)
+    print("Flux Kafka parsé correctement")
 
     # ===================================================================
-    # 7. Write EVERY flow to Cassandra (historical table: flows)
+    # 6. Prédiction en temps réel avec le modèle entraîné
     # ===================================================================
-    historical_query = predictions_df \
+    predictions_stream = model.transform(parsed_stream)
+
+    # ===================================================================
+    # 7. Écriture de TOUS les flux dans la table historique (netflow.flows)
+    # ===================================================================
+    historical_query = predictions_stream \
         .writeStream \
         .format("org.apache.spark.sql.cassandra") \
         .options(table="flows", keyspace="netflow") \
@@ -80,16 +106,27 @@ def start_streaming_prediction():
         .outputMode("append") \
         .start()
 
+    print("Écriture vers netflow.flows démarrée")
+
     # ===================================================================
-    # 8. Write predictions to Cassandra (real-time table: predictions)
+    # 8. Écriture des prédictions dans la table temps réel (netflow.predictions)
     # ===================================================================
-    prediction_query = predictions_df \
+    predictions_to_save = predictions_stream \
         .select(
-            "SRC_IP_INT", "timestamp", "DST_IP_INT",
-            "L4_SRC_PORT", "L4_DST_PORT", "PROTOCOL",
-            "IN_BYTES", "OUT_BYTES", "FLOW_DURATION_MILLISECONDS",
-            "prediction"
-        ) \
+            "src_ip_int",
+            "dst_ip_int",
+            "src_port",
+            "dst_port",
+            "protocol",
+            "in_bytes",
+            "out_bytes",
+            "duration_ms",
+            "ingestion_time",
+            col("prediction").alias("is_anomaly"),           # 1 = attaque
+            col("probability")[1].alias("anomaly_score")     # probabilité d'attaque
+        )
+
+    predictions_query = predictions_to_save \
         .writeStream \
         .format("org.apache.spark.sql.cassandra") \
         .options(table="predictions", keyspace="netflow") \
@@ -97,26 +134,22 @@ def start_streaming_prediction():
         .outputMode("append") \
         .start()
 
+    print("Écriture vers netflow.predictions démarrée")
+
     # ===================================================================
-    # 9. Send only malicious flows (prediction == 1) to Kafka topic "alerts"
+    # 9. Envoi des alertes (attaques détectées) vers le topic Kafka "alerts"
     # ===================================================================
-    alerts_df = predictions_df \
+    alerts_stream = predictions_stream \
         .filter(col("prediction") == 1) \
-        .selectExpr(
-            "SRC_IP_INT as src_ip_int",
-            "DST_IP_INT as dst_ip_int",
-            "L4_SRC_PORT as src_port",
-            "L4_DST_PORT as dst_port",
-            "PROTOCOL as protocol",
-            "IN_BYTES as in_bytes",
-            "OUT_BYTES as out_bytes",
-            "FLOW_DURATION_MILLISECONDS as duration_ms",
-            "prediction",
-            "timestamp"
+        .select(
+            to_json(struct(
+                "src_ip", "dst_ip", "src_port", "dst_port",
+                "protocol", "in_bytes", "out_bytes", "duration_ms",
+                "anomaly_score", "ingestion_time"
+            )).alias("value")
         )
 
-    alerts_query = alerts_df \
-        .selectExpr("to_json(struct(*)) AS value") \
+    alerts_query = alerts_stream \
         .writeStream \
         .format("kafka") \
         .option("kafka.bootstrap.servers", "kafka:9092") \
@@ -125,19 +158,25 @@ def start_streaming_prediction():
         .outputMode("append") \
         .start()
 
-    # ===================================================================
-    # 10. Start everything and keep the application alive
-    # ===================================================================
-    print("Real-time pipeline started!")
-    print("→ All flows        → Cassandra netflow.flows")
-    print("→ Predictions      → Cassandra netflow.predictions")
-    print("→ Attack alerts    → Kafka topic 'alerts'")
+    print("Alertes envoyées vers le topic Kafka 'alerts'")
 
-    # Wait for all streams to finish (they never do in production)
-    historical_query.awaitTermination()
-    prediction_query.awaitTermination()
+    # ===================================================================
+    # 10. Démarrage complet du pipeline
+    # ===================================================================
+    print("\n" + "="*60)
+    print(" PIPELINE TEMPS RÉEL NETFLOW ACTIVÉE AVEC SUCCÈS !")
+    print("="*60)
+    print("→ Tous les flux → Cassandra (netflow.flows)")
+    print("→ Prédictions → Cassandra (netflow.predictions)")
+    print("→ Alertes attaques → Kafka topic 'alerts'")
+    print("→ Modèle utilisé :", model_path)
+    print("="*60)
+
+    # Attente infinie (le streaming ne s'arrête jamais)
     alerts_query.awaitTermination()
 
-
+# ===================================================================
+# Lancement du script
+# ===================================================================
 if __name__ == "__main__":
     start_streaming_prediction()
