@@ -41,24 +41,20 @@ df_clean = df_clean \
     .withColumn("dst_ip", trim(col("IPV4_DST_ADDR"))) \
     .withColumn("src_ip_int",
         expr("""
-        coalesce(
-          (cast(regexp_extract(src_ip, '^(\\d+)\\.(\\d+)\\.(\\d+)\\.(\\d+)$', 1) as int) << 24) +
-          (cast(regexp_extract(src_ip, '^(\\d+)\\.(\\d+)\\.(\\d+)\\.(\\d+)$', 2) as int) << 16) +
-          (cast(regexp_extract(src_ip, '^(\\d+)\\.(\\d+)\\.(\\d+)\\.(\\d+)$', 3) as int) << 8) +
-           cast(regexp_extract(src_ip, '^(\\d+)\\.(\\d+)\\.(\\d+)\\.(\\d+)$', 4) as int),
-          0
-        )
+        cast(regexp_extract(src_ip, '^(\\d+)\\.(\\d+)\\.(\\d+)\\.(\\d+)$', 1) as int) * 16777216 +
+        cast(regexp_extract(src_ip, '^(\\d+)\\.(\\d+)\\.(\\d+)\\.(\\d+)$', 2) as int) * 65536 +
+        cast(regexp_extract(src_ip, '^(\\d+)\\.(\\d+)\\.(\\d+)\\.(\\d+)$', 3) as int) * 256 +
+        cast(regexp_extract(src_ip, '^(\\d+)\\.(\\d+)\\.(\\d+)\\.(\\d+)$', 4) as int)
         """)) \
     .withColumn("dst_ip_int",
         expr("""
-        coalesce(
-          (cast(regexp_extract(dst_ip, '^(\\d+)\\.(\\d+)\\.(\\d+)\\.(\\d+)$', 1) as int) << 24) +
-          (cast(regexp_extract(dst_ip, '^(\\d+)\\.(\\d+)\\.(\\d+)\\.(\\d+)$', 2) as int) << 16) +
-          (cast(regexp_extract(dst_ip, '^(\\d+)\\.(\\d+)\\.(\\d+)\\.(\\d+)$', 3) as int) << 8) +
-           cast(regexp_extract(dst_ip, '^(\\d+)\\.(\\d+)\\.(\\d+)\\.(\\d+)$', 4) as int),
-          0
-        )
-        """))
+        cast(regexp_extract(dst_ip, '^(\\d+)\\.(\\d+)\\.(\\d+)\\.(\\d+)$', 1) as int) * 16777216 +
+        cast(regexp_extract(dst_ip, '^(\\d+)\\.(\\d+)\\.(\\d+)\\.(\\d+)$', 2) as int) * 65536 +
+        cast(regexp_extract(dst_ip, '^(\\d+)\\.(\\d+)\\.(\\d+)\\.(\\d+)$', 3) as int) * 256 +
+        cast(regexp_extract(dst_ip, '^(\\d+)\\.(\\d+)\\.(\\d+)\\.(\\d+)$', 4) as int)
+        """)) \
+    .withColumn("src_ip_int", coalesce(col("src_ip_int"), lit(0))) \
+    .withColumn("dst_ip_int", coalesce(col("dst_ip_int"), lit(0)))
 
 # تحويل الأنواع (كما كنت تفعل)
 df_clean = df_clean \
