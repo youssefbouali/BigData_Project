@@ -123,7 +123,7 @@ def start_streaming_prediction():
             "duration_ms",
             "ingestion_time",
             col("prediction").alias("is_anomaly"),           # 1 = attaque
-            col("probability")[1].alias("anomaly_score")     # probabilité d'attaque
+            expr("probability[1]").alias("anomaly_score")     # probabilité d'attaque
         )
 
     predictions_query = predictions_to_save \

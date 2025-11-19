@@ -27,7 +27,7 @@ inotifywait -m $PCAP_DIR -e create -e moved_to |
             nfpcapd -r "$PCAP_FILE" -l "$FLOW_DIR/" -t 60 -w
 
             # 2. export CSV
-            nfdump -r "$FLOW_DIR/nfcapd."* -o csv > "$CSV_FILE.tmp"
+            nfdump -r "$FLOW_DIR"/nfcapd.* -o csv > "$CSV_FILE.tmp"
             mv "$CSV_FILE.tmp" "$CSV_FILE"
 
             # 3. extraction CICFlowMeter (if available)
