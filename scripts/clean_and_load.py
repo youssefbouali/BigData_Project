@@ -33,24 +33,31 @@ print("Colonnes détectées :", df.columns)
 # ===================================================================
 # Nettoyage + تحويل IP → Integer بدون UDF (الحل السحري)
 # ===================================================================
+# الحل الأمثل والأقصر والأكثر أمانًا
 df_clean = df.na.drop(subset=["IPV4_SRC_ADDR", "IPV4_DST_ADDR"])
 
 df_clean = df_clean \
-    .withColumn("src_ip", regexp_replace(col("IPV4_SRC_ADDR"), " ", "")) \
-    .withColumn("dst_ip", regexp_replace(col("IPV4_DST_ADDR"), " ", "")) \
+    .withColumn("src_ip", trim(col("IPV4_SRC_ADDR"))) \
+    .withColumn("dst_ip", trim(col("IPV4_DST_ADDR"))) \
     .withColumn("src_ip_int",
         expr("""
-        cast(conv(split(src_ip, '\\.')[0], 10, 16) as int) * 16777216 +
-        cast(conv(split(src_ip, '\\.')[1], 10, 16) as int) * 65536 +
-        cast(conv(split(src_ip, '\\.')[2], 10, 16) as int) * 256 +
-        cast(conv(split(src_ip, '\\.')[3], 10, 16) as int)
+        coalesce(
+          (cast(regexp_extract(src_ip, '^(\\d+)\\.(\\d+)\\.(\\d+)\\.(\\d+)$', 1) as int) << 24) +
+          (cast(regexp_extract(src_ip, '^(\\d+)\\.(\\d+)\\.(\\d+)\\.(\\d+)$', 2) as int) << 16) +
+          (cast(regexp_extract(src_ip, '^(\\d+)\\.(\\d+)\\.(\\d+)\\.(\\d+)$', 3) as int) << 8) +
+           cast(regexp_extract(src_ip, '^(\\d+)\\.(\\d+)\\.(\\d+)\\.(\\d+)$', 4) as int),
+          0
+        )
         """)) \
     .withColumn("dst_ip_int",
         expr("""
-        cast(conv(split(dst_ip, '\\.')[0], 10, 16) as int) * 16777216 +
-        cast(conv(split(dst_ip, '\\.')[1], 10, 16) as int) * 65536 +
-        cast(conv(split(dst_ip, '\\.')[2], 10, 16) as int) * 256 +
-        cast(conv(split(dst_ip, '\\.')[3], 10, 16) as int)
+        coalesce(
+          (cast(regexp_extract(dst_ip, '^(\\d+)\\.(\\d+)\\.(\\d+)\\.(\\d+)$', 1) as int) << 24) +
+          (cast(regexp_extract(dst_ip, '^(\\d+)\\.(\\d+)\\.(\\d+)\\.(\\d+)$', 2) as int) << 16) +
+          (cast(regexp_extract(dst_ip, '^(\\d+)\\.(\\d+)\\.(\\d+)\\.(\\d+)$', 3) as int) << 8) +
+           cast(regexp_extract(dst_ip, '^(\\d+)\\.(\\d+)\\.(\\d+)\\.(\\d+)$', 4) as int),
+          0
+        )
         """))
 
 # تحويل الأنواع (كما كنت تفعل)
