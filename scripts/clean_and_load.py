@@ -1,104 +1,61 @@
-# =================================================
-# Load Cleaned NetFlow Data into Cassandra
-# Fully compliant with Cahier des Charges
-# =================================================
-
+# scripts/clean_and_load.py
 from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, udf, to_timestamp
+from pyspark.sql.types import IntegerType
+import re
 
-from cassandra.cluster import Cluster
-from cassandra.auth import PlainTextAuthProvider
-
-import pandas as pd
-from datetime import datetime
-
+# UDF pour convertir IP → int
 def ip_to_int(ip):
     try:
-        parts = ip.strip().split('.')
-        if len(parts) == 4:
-            return int(''.join([f"{int(p):03d}" for p in parts]))
+        parts = str(ip).strip().split('.')
+        if len(parts) == 4 and all(p.isdigit() for p in parts):
+            return int(''.join(f"{int(p):03d}" for p in parts))
         return 0
     except:
         return 0
 
+ip_to_int_udf = udf(ip_to_int, IntegerType())
+
+# Spark Session avec connecteur Cassandra
 spark = SparkSession.builder \
     .appName("LoadNetFlowToCassandra") \
+    .master("spark://spark-master:7077") \
     .config("spark.cassandra.connection.host", "cassandra") \
+    .config("spark.cassandra.auth.username", "cassandra") \
+    .config("spark.cassandra.auth.password", "cassandra") \
     .getOrCreate()
 
+print("Lecture du fichier CSV...")
+df = spark.read.option("header", "true").csv("/data/NF-CSE-CIC-IDS2018-v2_CLEAN_WITH_LABEL.csv")
 
+print(f"Nombre de lignes brutes : {df.count():,}")
 
-auth_provider = PlainTextAuthProvider(username='cassandra', password='cassandra')
+# Nettoyage + transformation
+df_clean = df.dropna() \
+    .withColumn("timestamp", to_timestamp(col("Timestamp"))) \
+    .withColumn("src_ip_int", ip_to_int_udf(col("IPV4_SRC_ADDR"))) \
+    .withColumn("dst_ip_int", ip_to_int_udf(col("IPV4_DST_ADDR"))) \
+    .withColumn("src_port", col("L4_SRC_PORT").cast("int")) \
+    .withColumn("dst_port", col("L4_DST_PORT").cast("int")) \
+    .withColumn("protocol", col("PROTOCOL").cast("int")) \
+    .withColumn("in_bytes", col("IN_BYTES").cast("long")) \
+    .withColumn("out_bytes", col("OUT_BYTES").cast("long")) \
+    .withColumn("duration_ms", col("FLOW_DURATION_MILLISECONDS").cast("long")) \
+    .withColumn("label", col("Label_Binaire").cast("int"))
 
-cluster = Cluster(
-    contact_points=['cassandra'],
-    port=9042,
-    auth_provider=auth_provider,
-    connect_timeout=30,
-    control_connection_timeout=30,
-    idle_heartbeat_interval=30
+# Sélection finale
+df_final = df_clean.select(
+    "src_ip_int", "timestamp", "dst_ip_int", "src_port", "dst_port",
+    "protocol", "in_bytes", "out_bytes", "duration_ms", "label"
 )
 
-session = cluster.connect()
+print(f"Écriture dans Cassandra netflow.flows ... ({df_final.count():,} lignes)")
 
-session.execute("CREATE KEYSPACE IF NOT EXISTS netflow WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}")
-session.set_keyspace("netflow")
+df_final.write \
+    .format("org.apache.spark.sql.cassandra") \
+    .options(table="flows", keyspace="netflow") \
+    .mode("append") \
+    .save()
 
-session.execute("""
-CREATE TABLE IF NOT EXISTS netflow.flows (
-    src_ip_int INT,
-    timestamp TIMESTAMP,
-    dst_ip_int INT,
-    src_port INT,
-    dst_port INT,
-    protocol INT,
-    in_bytes BIGINT,
-    out_bytes BIGINT,
-    duration_ms BIGINT,
-    label INT,
-    PRIMARY KEY (src_ip_int, timestamp)
-) WITH CLUSTERING ORDER BY (timestamp DESC)
-""")
-
-insert_query = session.prepare("""
-INSERT INTO netflow.flows (
-    src_ip_int, timestamp, dst_ip_int, src_port, dst_port,
-    protocol, in_bytes, out_bytes, duration_ms, label
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-""")
-
-csv_path = "/data/NF-CSE-CIC-IDS2018-v2_CLEAN_WITH_LABEL.csv"
-print("Starting data loading from:", csv_path)
-
-chunk_size = 10_000
-total_rows = 0
-
-for i, chunk in enumerate(pd.read_csv(csv_path, chunksize=chunk_size)):
-    print(f"Processing chunk {i+1}...")
-    chunk = chunk.dropna()
-    
-    for _, row in chunk.iterrows():
-        try:
-            ts_str = str(row['Timestamp']).split('.')[0]
-            timestamp = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
-        except:
-            timestamp = datetime.now()
-
-        session.execute(insert_query, (
-            ip_to_int(str(row.get('IPV4_SRC_ADDR', '0.0.0.0'))),
-            timestamp,
-            ip_to_int(str(row.get('IPV4_DST_ADDR', '0.0.0.0'))),
-            int(row.get('L4_SRC_PORT', 0)),
-            int(row.get('L4_DST_PORT', 0)),
-            int(row.get('PROTOCOL', 6)),
-            int(row.get('IN_BYTES', 0)),
-            int(row.get('OUT_BYTES', 0)),
-            int(row.get('FLOW_DURATION_MILLISECONDS', 0)),
-            int(row.get('Label_Binaire', 0))
-        ))
-        total_rows += 1
-        if total_rows % 5000 == 0:
-            print(f"   Loaded {total_rows:,} rows...")
-
-print(f"All data loaded successfully! Total: {total_rows:,} rows")
-cluster.shutdown()
+print("Données chargées avec succès dans Cassandra !")
 spark.stop()
