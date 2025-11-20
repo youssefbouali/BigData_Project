@@ -31,7 +31,7 @@ def start_streaming_prediction():
     # ===================================================================
     # 2. Chargement du modèle entraîné (doit exister dans /models/)
     # ===================================================================
-    model_path = "/models/anomaly_detection_model_rf.spark"
+    model_path = "/models/2anomaly_detection_model_rf.spark"
     print(f"Chargement du modèle depuis : {model_path}")
     model = PipelineModel.load(model_path)
     print("Modèle chargé avec succès !")
