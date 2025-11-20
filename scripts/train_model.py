@@ -128,7 +128,7 @@ for feat, imp in feat_imp:
 # -------------------------------
 # 10. Sauvegarde du modèle
 # -------------------------------
-model_path = "/models/anomaly_detection_model_rf.spark"
+model_path = "/models/2anomaly_detection_model_rf.spark"
 os.makedirs("/models", exist_ok=True)
 model.save(model_path)
 print(f"Modèle sauvegardé → {model_path}")
