@@ -93,10 +93,30 @@ data_to_test = attack_data        # ← Change to benign_data to test normal tra
 #from pyspark.sql import Row
 #df = spark.createDataFrame([Row(**record) for record in data_to_test])
 
+#import pandas as pd
+#pdf = pd.DataFrame(data_to_test, columns=feature_columns_exact)
+#df = spark.createDataFrame(pdf)
+
+#df = spark.createDataFrame(pd.DataFrame(data_to_test, columns=feature_columns_exact))
+
+from pyspark.sql import Row
 import pandas as pd
 
-pdf = pd.DataFrame(data_to_test, columns=feature_columns_exact)
-df = spark.createDataFrame(pdf)
+# الحل الأكيد واللي بيشتغل مع كل الأنواع (dict أو list أو tuple)
+try:
+    # لو كانت dicts
+    df = spark.createDataFrame(data_to_test)
+except:
+    try:
+        # لو كانت list of tuples
+        df = spark.createDataFrame(data_to_test, schema=feature_columns_exact)
+    except:
+        # لو أي حاجة تانية → نحولها لـ pandas ثم لـ spark (أضمن طريقة في التاريخ)
+        pdf = pd.DataFrame(data_to_test, columns=feature_columns_exact)
+        df = spark.createDataFrame(pdf)
+
+print(f"Test DataFrame created successfully with {df.count()} records")
+df.show(5, truncate=False)
 
 print("\nInput NetFlow record:")
 df.show(1, truncate=False, vertical=True)
