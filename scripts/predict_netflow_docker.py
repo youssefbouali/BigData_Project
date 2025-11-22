@@ -88,7 +88,12 @@ benign_data = [(
 data_to_test = attack_data        # ← Change to benign_data to test normal traffic
 
 # Create Spark DataFrame
-df = spark.createDataFrame(data_to_test, feature_columns_exact)
+#df = spark.createDataFrame(data_to_test, feature_columns_exact)
+
+from pyspark.sql import Row
+
+
+df = spark.createDataFrame([Row(**record) for record in data_to_test])
 
 print("\nInput NetFlow record:")
 df.show(1, truncate=False, vertical=True)
