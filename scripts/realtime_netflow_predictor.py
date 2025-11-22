@@ -1,177 +1,129 @@
-# realtime_netflow_predictor.py
-# Real-time NetFlow / Packet → Spark ML Model Inference (Zero pickling, Super Fast)
+# /scripts/realtime_netflow_predictor_test.py
+# نسخة اختبار فورية - تشتغل داخل spark-master بدون host network
+# تطبع تنبيه على كل باكت يشوفها الكونتينر (حتى لو باكت واحد)
 
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import lit, current_timestamp
+from pyspark.sql.functions import lit
 from pyspark.ml.classification import RandomForestClassificationModel
 from pyspark.ml.feature import VectorAssembler
-from scapy.all import sniff, IP, TCP, UDP
-import threading
+from scapy.all import sniff, IP, TCP, UDP, ICMP
 import time
 
-# ====================== Spark Setup (Once) ======================
+# Spark Session
 spark = SparkSession.builder \
-    .appName("RealTime NetFlow Anomaly Detector") \
+    .appName("RealTime-Fast-Test") \
     .master("local[*]") \
     .config("spark.driver.memory", "4g") \
-    .config("spark.sql.streaming.checkpointLocation", "/tmp/checkpoint") \
     .getOrCreate()
 
-# تحميل الموديل مرة واحدة فقط
-print("Loading model...")
+print("Loading model from /model/anomaly_detection_model_rf.spark ...")
 model = RandomForestClassificationModel.load("/model/anomaly_detection_model_rf.spark")
 print("Model loaded successfully!")
 
-# VectorAssembler (نفس الفيتشورز بالظبط زي التدريب)
-assembler = VectorAssembler(
-    inputCols=[
-        "L4_SRC_PORT", "L4_DST_PORT", "PROTOCOL", "L7_PROTO", "IN_BYTES", "IN_PKTS",
-        "OUT_BYTES", "OUT_PKTS", "TCP_FLAGS", "CLIENT_TCP_FLAGS", "SERVER_TCP_FLAGS",
-        "FLOW_DURATION_MILLISECONDS", "DURATION_IN", "DURATION_OUT", "MIN_TTL", "MAX_TTL",
-        "LONGEST_FLOW_PKT", "SHORTEST_FLOW_PKT", "MIN_IP_PKT_LEN", "MAX_IP_PKT_LEN",
-        "SRC_TO_DST_SECOND_BYTES", "DST_TO_SRC_SECOND_BYTES", "RETRANSMITTED_IN_BYTES",
-        "RETRANSMITTED_IN_PKTS", "RETRANSMITTED_OUT_BYTES", "RETRANSMITTED_OUT_PKTS",
-        "SRC_TO_DST_AVG_THROUGHPUT", "DST_TO_SRC_AVG_THROUGHPUT", "NUM_PKTS_UP_TO_128_BYTES",
-        "NUM_PKTS_128_TO_256_BYTES", "NUM_PKTS_256_TO_512_BYTES", "NUM_PKTS_512_TO_1024_BYTES",
-        "NUM_PKTS_1024_TO_1514_BYTES", "TCP_WIN_MAX_IN", "TCP_WIN_MAX_OUT", "ICMP_TYPE",
-        "ICMP_IPV4_TYPE", "DNS_QUERY_ID", "DNS_QUERY_TYPE", "DNS_TTL_ANSWER", "FTP_COMMAND_RET_CODE"
-    ],
-    outputCol="features"
-)
+# نفس الفيتشورز بالترتيب الصحيح
+input_cols = [
+    "L4_SRC_PORT", "L4_DST_PORT", "PROTOCOL", "L7_PROTO", "IN_BYTES", "IN_PKTS",
+    "OUT_BYTES", "OUT_PKTS", "TCP_FLAGS", "CLIENT_TCP_FLAGS", "SERVER_TCP_FLAGS",
+    "FLOW_DURATION_MILLISECONDS", "DURATION_IN", "DURATION_OUT", "MIN_TTL", "MAX_TTL",
+    "LONGEST_FLOW_PKT", "SHORTEST_FLOW_PKT", "MIN_IP_PKT_LEN", "MAX_IP_PKT_LEN",
+    "SRC_TO_DST_SECOND_BYTES", "DST_TO_SRC_SECOND_BYTES", "RETRANSMITTED_IN_BYTES",
+    "RETRANSMITTED_IN_PKTS", "RETRANSMITTED_OUT_BYTES", "RETRANSMITTED_OUT_PKTS",
+    "SRC_TO_DST_AVG_THROUGHPUT", "DST_TO_SRC_AVG_THROUGHPUT", "NUM_PKTS_UP_TO_128_BYTES",
+    "NUM_PKTS_128_TO_256_BYTES", "NUM_PKTS_256_TO_512_BYTES", "NUM_PKTS_512_TO_1024_BYTES",
+    "NUM_PKTS_1024_TO_1514_BYTES", "TCP_WIN_MAX_IN", "TCP_WIN_MAX_OUT", "ICMP_TYPE",
+    "ICMP_IPV4_TYPE", "DNS_QUERY_ID", "DNS_QUERY_TYPE", "DNS_TTL_ANSWER", "FTP_COMMAND_RET_CODE"
+]
 
-# متغيرات عشان نحسب الفلوز لحظيًا
-flow_cache = {}  # key: (src_ip, dst_ip, src_port, dst_port, proto) → stats
+assembler = VectorAssembler(inputCols=input_cols, outputCol="features")
 
-def update_flow_and_predict(pkt):
+def predict_packet(pkt):
     if not pkt.haslayer(IP):
         return
 
     ip = pkt[IP]
     src_ip = ip.src
     dst_ip = ip.dst
-    proto = ip.proto  # 6=TCP, 17=UDP, 1=ICMP
+    proto = ip.proto
     pkt_len = len(pkt)
+    ttl = ip.ttl
 
-    # جلب البورتات
+    # Ports
     src_port = dst_port = 0
     tcp_flags = 0
     if pkt.haslayer(TCP):
         src_port = pkt[TCP].sport
         dst_port = pkt[TCP].dport
-        tcp_flags = pkt[TCP].flags  # قيمة عددية زي 2=SYN, 18=SYN-ACK, إلخ
+        tcp_flags = int(pkt[TCP].flags)
     elif pkt.haslayer(UDP):
         src_port = pkt[UDP].sport
         dst_port = pkt[UDP].dport
+    elif pkt.haslayer(ICMP):
+        proto = 1
 
-    flow_key = (src_ip, dst_ip, src_port, dst_port, proto)
-    reverse_key = (dst_ip, src_ip, dst_port, src_port, proto)
+    # بنعمل DataFrame باكت واحد بقيم منطقية
+    df = spark.range(1).drop("id")
 
-    # نحدّث الفلو (أو نعمل واحد جديد)
-    now = time.time()
-    if flow_key not in flow_cache:
-        flow_cache[flow_key] = {
-            "start_time": now,
-            "in_bytes": 0, "in_pkts": 0,
-            "out_bytes": 0, "out_pkts": 0,
-            "tcp_flags": 0, "client_flags": 0, "server_flags": 0,
-            "ttl_list": [], "pkt_sizes": []
-        }
-    flow = flow_cache[flow_key]
+    df = df.withColumn("L4_SRC_PORT", lit(src_port)) \
+           .withColumn("L4_DST_PORT", lit(dst_port)) \
+           .withColumn("PROTOCOL", lit(proto)) \
+           .withColumn("L7_PROTO", lit(80.0 if dst_port in [80,443] else 0.0)) \
+           .withColumn("IN_BYTES", lit(pkt_len * 15)) \
+           .withColumn("IN_PKTS", lit(15)) \
+           .withColumn("OUT_BYTES", lit(pkt_len * 12)) \
+           .withColumn("OUT_PKTS", lit(12)) \
+           .withColumn("TCP_FLAGS", lit(tcp_flags)) \
+           .withColumn("CLIENT_TCP_FLAGS", lit(tcp_flags)) \
+           .withColumn("SERVER_TCP_FLAGS", lit(tcp_flags)) \
+           .withColumn("FLOW_DURATION_MILLISECONDS", lit(800)) \
+           .withColumn("DURATION_IN", lit(400)) \
+           .withColumn("DURATION_OUT", lit(400)) \
+           .withColumn("MIN_TTL", lit(ttl)) \
+           .withColumn("MAX_TTL", lit(ttl)) \
+           .withColumn("LONGEST_FLOW_PKT", lit(pkt_len)) \
+           .withColumn("SHORTEST_FLOW_PKT", lit(pkt_len)) \
+           .withColumn("MIN_IP_PKT_LEN", lit(pkt_len)) \
+           .withColumn("MAX_IP_PKT_LEN", lit(pkt_len)) \
+           .withColumn("SRC_TO_DST_SECOND_BYTES", lit(pkt_len * 20.0)) \
+           .withColumn("DST_TO_SRC_SECOND_BYTES", lit(pkt_len * 15.0)) \
+           .withColumn("RETRANSMITTED_IN_BYTES", lit(0)) \
+           .withColumn("RETRANSMITTED_IN_PKTS", lit(0)) \
+           .withColumn("RETRANSMITTED_OUT_BYTES", lit(0)) \
+           .withColumn("RETRANSMITTED_OUT_PKTS", lit(0)) \
+           .withColumn("SRC_TO_DST_AVG_THROUGHPUT", lit(5000000.0)) \
+           .withColumn("DST_TO_SRC_AVG_THROUGHPUT", lit(4000000.0)) \
+           .withColumn("NUM_PKTS_UP_TO_128_BYTES", lit(10 if pkt_len <= 128 else 0)) \
+           .withColumn("NUM_PKTS_128_TO_256_BYTES", lit(3 if 128 < pkt_len <= 256 else 0)) \
+           .withColumn("NUM_PKTS_256_TO_512_BYTES", lit(1 if 256 < pkt_len <= 512 else 0)) \
+           .withColumn("NUM_PKTS_512_TO_1024_BYTES", lit(1 if 512 < pkt_len <= 1024 else 0)) \
+           .withColumn("NUM_PKTS_1024_TO_1514_BYTES", lit(1 if pkt_len > 1024 else 0)) \
+           .withColumn("TCP_WIN_MAX_IN", lit(65535)) \
+           .withColumn("TCP_WIN_MAX_OUT", lit(65535)) \
+           .withColumn("ICMP_TYPE", lit(8 if proto == 1 else 0)) \
+           .withColumn("ICMP_IPV4_TYPE", lit(8 if proto == 1 else 0)) \
+           .withColumn("DNS_QUERY_ID", lit(0)) \
+           .withColumn("DNS_QUERY_TYPE", lit(0)) \
+           .withColumn("DNS_TTL_ANSWER", lit(0)) \
+           .withColumn("FTP_COMMAND_RET_CODE", lit(0.0))
 
-    # تحديد الاتجاه
-    if flow_key == reverse_key or flow_key in flow_cache:
-        # outgoing
-        flow["out_bytes"] += pkt_len
-        flow["out_pkts"] += 1
-        if pkt.haslayer(TCP):
-            flow["server_flags"] |= tcp_flags
-    else:
-        # incoming
-        flow["in_bytes"] += pkt_len
-        flow["in_pkts"] += 1
-        if pkt.haslayer(TCP):
-            flow["client_flags"] |= tcp_flags
+    # Vector + Predict
+    try:
+        vec = assembler.transform(df)
+        result = model.transform(vec).select("prediction", "probability").collect()[0]
+        label = "ATTACK" if result.prediction == 1 else "BENIGN"
+        prob = float(result.probability[1]) * 100
 
-    flow["tcp_flags"] |= tcp_flags
-    flow["ttl_list"].append(ip.ttl)
-    flow["pkt_sizes"].append(pkt_len)
+        print("\n" + "="*90)
+        print(f" REAL-TIME DETECTION | {src_ip}:{src_port} → {dst_ip}:{dst_port} (Proto: {proto})")
+        print(f" PREDICTION → {label} | Attack Probability: {prob:.2f}%")
+        if label == "ATTACK":
+            print(" MALICIOUS TRAFFIC DETECTED! BLOCK THIS FLOW NOW!")
+        print("="*90)
+    except Exception as e:
+        print(f"Prediction error: {e}")
 
-    # لو الفلو استمر أكتر من 5 ثواني → نعمل prediction ونمسح الكاش
-    if now - flow["start_time"] > 5.0:
-        predict_flow(flow_key, flow)
-        del flow_cache[flow_key]
-
-def predict_flow(key, flow):
-    src_ip, dst_ip, src_port, dst_port, proto = key
-
-    # حساب الفيتشورز
-    duration_ms = int((time.time() - flow["start_time"]) * 1000)
-    in_bytes = flow["in_bytes"]
-    out_bytes = flow["out_bytes"]
-    in_pkts = flow["in_pkts"]
-    out_pkts = flow["out_pkts"]
-
-    # باقي الفيتشورز بنملاها بقيم منطقية (زي اللي في التدريب)
-    row = spark.range(1).drop("id") \
-        .withColumn("L4_SRC_PORT", lit(src_port)) \
-        .withColumn("L4_DST_PORT", lit(dst_port)) \
-        .withColumn("PROTOCOL", lit(proto)) \
-        .withColumn("L7_PROTO", lit(0.0 if proto not in [6,17] else 80.0)) \
-        .withColumn("IN_BYTES", lit(in_bytes)) \
-        .withColumn("IN_PKTS", lit(in_pkts)) \
-        .withColumn("OUT_BYTES", lit(out_bytes)) \
-        .withColumn("OUT_PKTS", lit(out_pkts)) \
-        .withColumn("TCP_FLAGS", lit(flow["tcp_flags"])) \
-        .withColumn("CLIENT_TCP_FLAGS", lit(flow["client_flags"])) \
-        .withColumn("SERVER_TCP_FLAGS", lit(flow["server_flags"])) \
-        .withColumn("FLOW_DURATION_MILLISECONDS", lit(duration_ms)) \
-        .withColumn("DURATION_IN", lit(duration_ms // 2)) \
-        .withColumn("DURATION_OUT", lit(duration_ms // 2)) \
-        .withColumn("MIN_TTL", lit(min(flow["ttl_list"]) if flow["ttl_list"] else 64)) \
-        .withColumn("MAX_TTL", lit(max(flow["ttl_list"]) if flow["ttl_list"] else 64)) \
-        .withColumn("LONGEST_FLOW_PKT", lit(max(flow["pkt_sizes"]) if flow["pkt_sizes"] else 1500)) \
-        .withColumn("SHORTEST_FLOW_PKT", lit(min(flow["pkt_sizes"]) if flow["pkt_sizes"] else 60)) \
-        .withColumn("MIN_IP_PKT_LEN", lit(min(flow["pkt_sizes"]) if flow["pkt_sizes"] else 60)) \
-        .withColumn("MAX_IP_PKT_LEN", lit(max(flow["pkt_sizes"]) if flow["pkt_sizes"] else 1514)) \
-        .withColumn("SRC_TO_DST_SECOND_BYTES", lit(out_bytes / max((time.time() - flow["start_time"]), 0.1))) \
-        .withColumn("DST_TO_SRC_SECOND_BYTES", lit(in_bytes / max((time.time() - flow["start_time"]), 0.1))) \
-        .withColumn("RETRANSMITTED_IN_BYTES", lit(0)) \
-        .withColumn("RETRANSMITTED_IN_PKTS", lit(0)) \
-        .withColumn("RETRANSMITTED_OUT_BYTES", lit(0)) \
-        .withColumn("RETRANSMITTED_OUT_PKTS", lit(0)) \
-        .withColumn("SRC_TO_DST_AVG_THROUGHPUT", lit(8000000.0)) \
-        .withColumn("DST_TO_SRC_AVG_THROUGHPUT", lit(8000000.0)) \
-        .withColumn("NUM_PKTS_UP_TO_128_BYTES", lit(sum(1 for s in flow["pkt_sizes"] if s <= 128))) \
-        .withColumn("NUM_PKTS_128_TO_256_BYTES", lit(sum(1 for s in flow["pkt_sizes"] if 128 < s <= 256))) \
-        .withColumn("NUM_PKTS_256_TO_512_BYTES", lit(sum(1 for s in flow["pkt_sizes"] if 256 < s <= 512))) \
-        .withColumn("NUM_PKTS_512_TO_1024_BYTES", lit(sum(1 for s in flow["pkt_sizes"] if 512 < s <= 1024))) \
-        .withColumn("NUM_PKTS_1024_TO_1514_BYTES", lit(sum(1 for s in flow["pkt_sizes"] if s > 1024))) \
-        .withColumn("TCP_WIN_MAX_IN", lit(65535)) \
-        .withColumn("TCP_WIN_MAX_OUT", lit(65535)) \
-        .withColumn("ICMP_TYPE", lit(0)) \
-        .withColumn("ICMP_IPV4_TYPE", lit(0)) \
-        .withColumn("DNS_QUERY_ID", lit(0)) \
-        .withColumn("DNS_QUERY_TYPE", lit(0)) \
-        .withColumn("DNS_TTL_ANSWER", lit(0)) \
-        .withColumn("FTP_COMMAND_RET_CODE", lit(0.0))
-
-    # Vectorize + Predict
-    vec = assembler.transform(row)
-    prediction = model.transform(vec)
-
-    result = prediction.select("prediction", "probability").collect()[0]
-    pred_label = "ATTACK" if result.prediction == 1 else "BENIGN"
-    prob_attack = float(result.probability[1])
-
-    print("\n" + "="*100)
-    print(f" REAL-TIME ALERT | {src_ip}:{src_port} → {dst_ip}:{dst_port} | Protocol: {proto}")
-    print(f" PREDICTION: {pred_label} | Attack Probability: {prob_attack:.2%}")
-    if pred_label == "ATTACK":
-        print(" !!! MALICIOUS TRAFFIC DETECTED! BLOCK THIS IP NOW !!!")
-    print("="*100)
-
-# ====================== بدء التقاط الباكتات ======================
-print("Starting real-time packet capture... (Press Ctrl+C to stop)")
-sniff(prn=update_flow_and_predict, store=False)  # يشتغل على أي واجهة
+# بدء التقاط الباكتات
+print("Starting real-time detection (every packet triggers prediction)...")
+print("Try: curl google.com   OR   hping3 --flood ...   inside/outside the container")
+sniff(prn=predict_packet, store=False, iface="eth0")
 
 spark.stop()
