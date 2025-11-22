@@ -15,6 +15,9 @@ print("Spark session created")
 
 # تحميل الموديل
 model = RandomForestClassificationModel.load("/model/anomaly_detection_model_rf.spark")
+
+#model = RandomForestClassificationModel.load("/models/2anomaly_detection_model_rf.spark")
+
 print("Model loaded successfully")
 
 # نعمل صف واحد فارغ
@@ -36,13 +39,6 @@ spark = SparkSession.builder \
 
 print("Spark session created successfully")
 
-# تحميل الموديل
-#model = RandomForestClassificationModel.load("/models/anomaly_detection_model_rf.spark")
-model = RandomForestClassificationModel.load("/models/2anomaly_detection_model_rf.spark")
-print("Model loaded successfully")
-
-# صف واحد فارغ + إضافة الأعمدة بالبيانات الجديدة (اللي تبدو طبيعية)
-df = spark.range(1).drop("id")
 
 df = df.withColumn("L4_SRC_PORT", lit(12345)) \
        .withColumn("L4_DST_PORT", lit(80)) \
