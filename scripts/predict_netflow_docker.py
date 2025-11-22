@@ -90,10 +90,13 @@ data_to_test = attack_data        # ← Change to benign_data to test normal tra
 # Create Spark DataFrame
 #df = spark.createDataFrame(data_to_test, feature_columns_exact)
 
-from pyspark.sql import Row
+#from pyspark.sql import Row
+#df = spark.createDataFrame([Row(**record) for record in data_to_test])
 
+import pandas as pd
 
-df = spark.createDataFrame([Row(**record) for record in data_to_test])
+pdf = pd.DataFrame(data_to_test, columns=feature_columns_exact)
+df = spark.createDataFrame(pdf)
 
 print("\nInput NetFlow record:")
 df.show(1, truncate=False, vertical=True)
