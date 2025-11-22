@@ -14,7 +14,8 @@ from pyspark.ml.feature import VectorAssembler
 spark = (
     SparkSession.builder
         .appName("NetFlow Anomaly Detection - Docker Inference")
-        .master("spark://spark-master:7077")          # <-- Critical for Docker cluster
+        #.master("spark://spark-master:7077")          # <-- Critical for Docker cluster
+        .master("local[*]")          # <-- Critical for Docker cluster
         .config("spark.driver.memory", "4g")
         .config("spark.executor.memory", "2g")
         .config("spark.sql.adaptive.enabled", "true")
