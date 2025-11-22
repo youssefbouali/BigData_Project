@@ -63,7 +63,6 @@ data = Row(
     TCP_WIN_MAX_OUT=65535,
     ICMP_TYPE=0,
     ICMP_IPV4_TYPE=0,
-    ,
     DNS_QUERY_ID=0,
     DNS_QUERY_TYPE=0,
     DNS_TTL_ANSWER=0,
