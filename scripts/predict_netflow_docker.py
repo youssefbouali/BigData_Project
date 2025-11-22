@@ -1,7 +1,7 @@
 # =====================================================
 # predict_netflow_docker.py
-# Run the Kaggle-trained Random Forest model inside Docker
-# Works on spark-master / spark-worker / spark-submit
+# Final working version – November 2025
+# Works perfectly inside Docker with spark-submit
 # =====================================================
 
 from pyspark.sql import SparkSession
@@ -9,13 +9,12 @@ from pyspark.ml.classification import RandomForestClassificationModel
 from pyspark.ml.feature import VectorAssembler
 
 # -------------------------------------------------
-# 1. Spark Session – MUST use cluster master URL
+# 1. Spark Session
 # -------------------------------------------------
 spark = (
     SparkSession.builder
         .appName("NetFlow Anomaly Detection - Docker Inference")
-        #.master("spark://spark-master:7077")          # <-- Critical for Docker cluster
-        .master("local[*]")          # <-- Critical for Docker cluster
+        .master("local[*]")
         .config("spark.driver.memory", "4g")
         .config("spark.executor.memory", "2g")
         .config("spark.sql.adaptive.enabled", "true")
@@ -28,10 +27,9 @@ print(f"Spark version : {spark.version}")
 print(f"Master URL    : {spark.sparkContext.master}")
 
 # -------------------------------------------------
-# 2. Load the trained model (saved from Kaggle)
+# 2. Load the trained model
 # -------------------------------------------------
-model_path = "/model/anomaly_detection_model_rf.spark"   # <-- Path inside container
-
+model_path = "/model/anomaly_detection_model_rf.spark"
 try:
     loaded_model = RandomForestClassificationModel.load(model_path)
     print("Random Forest model loaded successfully from /model/")
@@ -41,8 +39,7 @@ except Exception as e:
     exit(1)
 
 # -------------------------------------------------
-# 3. Exact feature columns used during training
-#    (Order and names must be 100% identical!)
+# 3. Exact feature columns (must match training 100%)
 # -------------------------------------------------
 feature_columns_exact = [
     'L4_SRC_PORT', 'L4_DST_PORT', 'PROTOCOL', 'L7_PROTO', 'IN_BYTES', 'IN_PKTS', 'OUT_BYTES',
@@ -59,105 +56,67 @@ feature_columns_exact = [
 print(f"Number of features expected by the model: {len(feature_columns_exact)}")
 
 # -------------------------------------------------
-# 4. Example ATTACK flow (DDoS / Port Scan / etc.)
+# 4. Test data – ATTACK example (DDoS / Port Scan like)
 # -------------------------------------------------
-attack_data = [(
-    54321, 80, 6, 80.0,          # High port → HTTP flood / scan
-    85000, 1200, 92000, 980,     # Very high bytes/packets
-    31, 31, 31, 850,             # Short duration, many packets
-    420, 430, 64, 64, 1514, 64, 60, 1514,
-    85000.0, 92000.0, 2000, 25, 2500, 30,
-    80000000.0, 85000000.0, 1100, 80, 15, 5, 2,
-    65535, 65535, 0, 0, 0, 0, 0, 0.0
-)]
+attack_data = [
+    (54321, 80, 6, 80.0, 85000, 1200, 92000, 980, 31, 31, 31, 850,
+     420, 430, 64, 64, 1514, 64, 60, 1514, 85000.0, 92000.0,
+     2000, 25, 2500, 30, 80000000.0, 85000000.0, 1100, 80, 15, 5, 2,
+     65535, 65535, 0, 0, 0, 0, 0, 0.0)
+]
+
+benign_data = [
+    (54322, 443, 6, 443.0, 8500, 68, 3200, 52, 27, 27, 24, 1250,
+     600, 650, 128, 128, 1452, 64, 60, 1452, 8500.0, 3200.0,
+     0, 0, 0, 0, 5400000.0, 2048000.0, 25, 18, 12, 8, 5,
+     8192, 16384, 0, 0, 12345, 3, 300, 20.0)
+]
+
+# Choose what to test
+data_to_test = attack_data        # ← Change to benign_data for normal traffic
 
 # -------------------------------------------------
-# 5. Example BENIGN flow (normal HTTPS traffic)
+# 5. Create DataFrame – THE WORKING METHOD (2025 compatible)
 # -------------------------------------------------
-benign_data = [(
-    54322, 443, 6, 443.0,
-    8500, 68, 3200, 52,
-    27, 27, 24, 1250,
-    600, 650, 128, 128, 1452, 64, 60, 1452,
-    8500.0, 3200.0, 0, 0, 0, 0,
-    5400000.0, 2048000.0, 25, 18, 12, 8, 5,
-    8192, 16384, 0, 0, 12345, 3, 300, 20.0
-)]
+df = spark.createDataFrame(data_to_test).toDF(*feature_columns_exact)
 
-# Choose which one to test
-data_to_test = attack_data        # ← Change to benign_data to test normal traffic
-
-# Create Spark DataFrame
-#df = spark.createDataFrame(data_to_test, feature_columns_exact)
-
-#from pyspark.sql import Row
-#df = spark.createDataFrame([Row(**record) for record in data_to_test])
-
-#import pandas as pd
-#pdf = pd.DataFrame(data_to_test, columns=feature_columns_exact)
-#df = spark.createDataFrame(pdf)
-
-#df = spark.createDataFrame(pd.DataFrame(data_to_test, columns=feature_columns_exact))
-
-from pyspark.sql import Row
-import pandas as pd
-
-# الحل الأكيد واللي بيشتغل مع كل الأنواع (dict أو list أو tuple)
-try:
-    # لو كانت dicts
-    df = spark.createDataFrame(data_to_test)
-except:
-    try:
-        # لو كانت list of tuples
-        df = spark.createDataFrame(data_to_test, schema=feature_columns_exact)
-    except:
-        # لو أي حاجة تانية → نحولها لـ pandas ثم لـ spark (أضمن طريقة في التاريخ)
-        pdf = pd.DataFrame(data_to_test, columns=feature_columns_exact)
-        df = spark.createDataFrame(pdf)
-
-print(f"Test DataFrame created successfully with {df.count()} records")
+print(f"Test DataFrame created successfully with {df.count()} record(s)")
 df.show(5, truncate=False)
-
-print("\nInput NetFlow record:")
+print("\nInput NetFlow record (detailed):")
 df.show(1, truncate=False, vertical=True)
 
 # -------------------------------------------------
-# 6. Assemble features (model was trained without Pipeline)
+# 6. Assemble features vector
 # -------------------------------------------------
-assembler = VectorAssembler(
-    inputCols=feature_columns_exact,
-    outputCol="features",
-    handleInvalid="skip"
-)
-
+assembler = VectorAssembler(inputCols=feature_columns_exact, outputCol="features", handleInvalid="skip")
 df_assembled = assembler.transform(df)
 
 # -------------------------------------------------
-# 7. Prediction
+# 7. Make prediction
 # -------------------------------------------------
 prediction = loaded_model.transform(df_assembled)
-
-print("\n" + "="*70)
-print("                ANOMALY DETECTION RESULT")
-print("="*70)
-
 result = prediction.select("prediction", "probability").collect()[0]
+
 pred = int(result["prediction"])
 prob_attack = float(result["probability"][1])
 prob_benign = float(result["probability"][0])
 
-print(f"Prediction        : {'ATTACK' if pred == 1 else 'BENIGN'}")
+print("\n" + "="*70)
+print("           ANOMALY DETECTION RESULT")
+print("="*70)
+print(f"Prediction         : {'ATTACK' if pred == 1 else 'BENIGN'}")
 print(f"Attack probability : {prob_attack:.4f} ({prob_attack:.2%})")
 print(f"Benign probability : {prob_benign:.4f} ({prob_benign:.2%})")
-print(f"Confidence        : {max(prob_attack, prob_benign):.2%}")
+print(f"Confidence         : {max(prob_attack, prob_benign):.2%}")
 
 if pred == 1:
-    print("ALERT: Suspicious / malicious traffic detected!")
+    print("\nALERT: Suspicious / malicious traffic detected!")
 else:
-    print("Traffic is normal and safe")
+    print("\nTraffic is normal and safe")
 
 # -------------------------------------------------
-# 8. Stop Spark session
+# 8. Stop Spark
 # -------------------------------------------------
 spark.stop()
 print("\nSpark session stopped successfully")
+print("Prediction script finished – All Good!")
