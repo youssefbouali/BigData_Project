@@ -90,7 +90,7 @@ for msg in consumer:
     
     rows.append(row)
     if len(rows) == 2:
-        df = spark.createDataFrame(rows, schema=schema)
+        df = spark.createDataFrame(rows)
 
     
         pred = model.transform(assembler.transform(df)).collect()[0]
