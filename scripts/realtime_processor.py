@@ -42,7 +42,6 @@ consumer = KafkaConsumer(
 print("PROCESSOR ONLY STARTED – Waiting for packets from Kafka...")
 
 batch = []
-rows = []
 
 for msg in consumer:
     pkt = msg.value
@@ -86,27 +85,20 @@ for msg in consumer:
     }
 
     # أهم حاجة: نعمل DataFrame خارج أي loop أو function
-    #df = spark.createDataFrame([row])
-    
-    rows.append(row)
-    if len(rows) == 2:
-        df = spark.createDataFrame(rows)
+    df = spark.createDataFrame([row])
+    pred = model.transform(assembler.transform(df)).collect()[0]
+    score = float(pred.probability[1])
+    label = "ATTACK" if pred.prediction == 1 else "BENIGN"
 
-    
-        pred = model.transform(assembler.transform(df)).collect()[0]
-        score = float(pred.probability[1])
-        label = "ATTACK" if pred.prediction == 1 else "BENIGN"
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] {pkt['src_ip']}:{pkt['src_port']} → {pkt['dst_ip']}:{pkt['dst_port']} | {label} ({score:.4f})")
 
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] {pkt['src_ip']}:{pkt['src_port']} → {pkt['dst_ip']}:{pkt['dst_port']} | {label} ({score:.4f})")
+    batch.append({**pkt, "is_anomaly": int(pred.prediction), "anomaly_score": score, "ingestion_time": datetime.now()})
 
-        batch.append({**pkt, "is_anomaly": int(pred.prediction), "anomaly_score": score, "ingestion_time": datetime.now()})
-
-        if len(batch) >= 10:
-            spark.createDataFrame(batch).write \
-                .format("org.apache.spark.sql.cassandra") \
-                .option("table", "predictions") \
-                .option("keyspace", "netflow") \
-                .mode("append").save()
-            print(f"Saved {len(batch)} records to Cassandra")
-            batch = []
-        rows = []
+    if len(batch) >= 10:
+        spark.createDataFrame(batch).write \
+            .format("org.apache.spark.sql.cassandra") \
+            .option("table", "predictions") \
+            .option("keyspace", "netflow") \
+            .mode("append").save()
+        print(f"Saved {len(batch)} records to Cassandra")
+        batch = []
