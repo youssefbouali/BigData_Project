@@ -65,7 +65,7 @@ CREATE INDEX IF NOT EXISTS idx_label ON netflow.flows (label);
 CREATE INDEX IF NOT EXISTS idx_attack_type ON netflow.flows (attack_type);
 
 
-DROP TABLE IF EXISTS netflow.predictions;
+-- DROP TABLE IF EXISTS netflow.predictions;
 
 CREATE TABLE IF NOT EXISTS netflow.predictions (
     src_ip TEXT,
