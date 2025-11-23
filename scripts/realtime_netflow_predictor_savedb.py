@@ -184,7 +184,21 @@ def save_to_csv():
                 ])
         
         
-        df = spark.createDataFrame(results_cache)
+        from pyspark.sql.types import StructType, StructField, StringType, IntegerType, FloatType
+
+        schema = StructType([
+            StructField("src_ip", StringType(), True),
+            StructField("dst_ip", StringType(), True),
+            StructField("src_port", IntegerType(), True),
+            StructField("dst_port", IntegerType(), True),
+            StructField("protocol", StringType(), True),
+            StructField("is_anomaly", IntegerType(), True),
+            StructField("anomaly_score", FloatType(), True),
+            StructField("timestamp", StringType(), True)
+        ])
+
+        df = spark.createDataFrame(results_cache, schema)
+
         
         df_clean = df \
             .withColumn("src_ip", trim(col("src_ip"))) \
