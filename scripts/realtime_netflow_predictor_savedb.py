@@ -121,7 +121,7 @@ def save_to_cassandra():
 from pyspark.sql.functions import col, trim, to_timestamp
 
 def csv_to_cassandra(name):
-    CSV_PATH = "/data/"+name+".csv"
+    CSV_PATH = "/data/predictions_"+name+".csv"
 
     df = spark.read.option("header", "true") \
                    .option("inferSchema", "false") \
@@ -149,7 +149,7 @@ def csv_to_cassandra(name):
         .options(table="predictions", keyspace="netflow") \
         .mode("append") \
         .save()
-    os.remove("/data/"+name+".csv")
+    os.remove("/data/predictions_"+name+".csv")
 
 
 
