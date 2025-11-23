@@ -40,7 +40,7 @@ feature_cols = [
 assembler = VectorAssembler(inputCols=feature_cols, outputCol="features")
 
 # Redis connection
-r = redis.Redis(host='redis', port=6379, db=0)
+r = redis.Redis(host='172.17.0.1', port=6379, db=0)
 
 batch = []
 BATCH_SIZE = 10

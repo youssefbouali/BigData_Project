@@ -9,7 +9,7 @@ import struct
 import time
 
 # Connect to Redis (make sure redis service exists in docker-compose)
-r = redis.Redis(host='redis', port=6379, db=0, decode_responses=False)
+r = redis.Redis(host='172.17.0.1', port=6379, db=0, decode_responses=False)
 
 def ip_to_int(ip):
     try:
