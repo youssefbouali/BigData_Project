@@ -1,10 +1,15 @@
-# /scripts/realtime_capture_kafka.py
+# /scripts/realtime_capture_redis.py
+# Captures packets and pushes them to Redis (ignores Redis traffic)
+
 from scapy.all import sniff, IP, TCP, UDP
-from kafka import KafkaProducer
+import redis
 import json
 import socket
 import struct
 import time
+
+# Connect to Redis (make sure redis service exists in docker-compose)
+r = redis.Redis(host='redis', port=6379, db=0, decode_responses=False)
 
 def ip_to_int(ip):
     try:
@@ -12,44 +17,42 @@ def ip_to_int(ip):
     except:
         return 0
 
-producer = KafkaProducer(
-    bootstrap_servers=['kafka:9092'],
-    value_serializer=lambda v: json.dumps(v).encode('utf-8'),
-    acks=0,               # أسرع
-    linger_ms=1,
-    batch_size=16384
-)
-
-topic = "packets_raw"
-
-def handle(pkt):
-    if not pkt.haslayer(IP): return
-    ip = pkt[IP]
-
-    # تجاهل باكتات Kafka تمامًا
-    if pkt.haslayer(TCP) and (pkt[TCP].dport == 9092 or pkt[TCP].sport == 9092):
+def handle_packet(pkt):
+    if not pkt.haslayer(IP):
         return
 
-    try:
-        src_port = pkt[TCP].sport if pkt.haslayer(TCP) else (pkt[UDP].sport if pkt.haslayer(UDP) else 0)
-        dst_port = pkt[TCP].dport if pkt.haslayer(TCP) else (pkt[UDP].dport if pkt.haslayer(UDP) else 0)
-        tcp_flags = int(pkt[TCP].flags) if pkt.haslayer(TCP) else 0
+    ip = pkt[IP]
 
-        data = {
-            "src_ip": ip.src,
-            "dst_ip": ip.dst,
-            "src_ip_int": ip_to_int(ip.src),
-            "dst_ip_int": ip_to_int(ip.dst),
-            "src_port": src_port,
-            "dst_port": dst_port,
-            "protocol": ip.proto,
-            "pkt_len": len(pkt),
-            "tcp_flags": tcp_flags,
-            "ttl": ip.ttl,
-            "timestamp": time.time()
-        }
-        producer.send(topic, value=data)
-    except: pass
+    # Ignore Redis traffic (port 6379) to prevent loop
+    if pkt.haslayer(TCP) and (pkt[TCP].dport == 6379 or pkt[TCP].sport == 6379):
+        return
 
-print("REAL-TIME CAPTURE → Kafka STARTED (Kafka packets ignored)")
-sniff(prn=handle, store=False, iface="eth0")
+    src_port = dst_port = tcp_flags = 0
+    if pkt.haslayer(TCP):
+        src_port = pkt[TCP].sport
+        dst_port = pkt[TCP].dport
+        tcp_flags = int(pkt[TCP].flags)
+    elif pkt.haslayer(UDP):
+        src_port = pkt[UDP].sport
+        dst_port = pkt[UDP].dport
+
+    packet_data = {
+        "src_ip": ip.src,
+        "dst_ip": ip.dst,
+        "src_ip_int": ip_to_int(ip.src),
+        "dst_ip_int": ip_to_int(ip.dst),
+        "src_port": src_port,
+        "dst_port": dst_port,
+        "protocol": ip.proto,
+        "pkt_len": len(pkt),
+        "tcp_flags": tcp_flags,
+        "ttl": ip.ttl,
+        "timestamp": time.time()
+    }
+
+    # Push to Redis list (queue)
+    r.rpush("packets_queue", json.dumps(packet_data))
+    print(f"→ {ip.src}:{src_port} → {ip.dst}:{dst_port} (Len: {len(pkt)})")
+
+print("REAL-TIME PACKET CAPTURE → Redis STARTED (port 6379 traffic ignored)")
+sniff(prn=handle_packet, store=False, iface="eth0")
