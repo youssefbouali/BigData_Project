@@ -8,6 +8,10 @@ from kafka import KafkaConsumer
 import json
 from datetime import datetime
 
+
+def deserialize_kafka_message(msg_value):
+    return json.loads(msg_value.decode('utf-8'))
+
 spark = SparkSession.builder \
     .appName("IDS Processor Only") \
     .master("local[*]") \
@@ -26,7 +30,7 @@ assembler = VectorAssembler(inputCols=[
     "LONGEST_FLOW_PKT","SHORTEST_FLOW_PKT","MIN_IP_PKT_LEN","MAX_IP_PKT_LEN",
     "SRC_TO_DST_SECOND_BYTES","DST_TO_SRC_SECOND_BYTES","RETRANSMITTED_IN_BYTES",
     "RETRANSMITTED_IN_PKTS","RETRANSMITTED_OUT_BYTES","RETRANSMITTED_OUT_PKTS",
-    "SRC_TO_DST_AVG_THROUGHPUT","DST_TO_SRC_AVG_THROUGHPUT","NUM_PKTS_UP_TO_128", "NUM_PKTS_128_TO_256_BYTES","NUM_PKTS_256_TO_512_BYTES","NUM_PKTS_512_TO_1024_BYTES",
+    "SRC_TO_DST_AVG_THROUGHPUT","DST_TO_SRC_AVG_THROUGHPUT","NUM_PKTS_UP_TO_128_BYTES", "NUM_PKTS_128_TO_256_BYTES","NUM_PKTS_256_TO_512_BYTES","NUM_PKTS_512_TO_1024_BYTES",
     "NUM_PKTS_1024_TO_1514_BYTES","TCP_WIN_MAX_IN","TCP_WIN_MAX_OUT","ICMP_TYPE",
     "ICMP_IPV4_TYPE","DNS_QUERY_ID","DNS_QUERY_TYPE","DNS_TTL_ANSWER","FTP_COMMAND_RET_CODE"
 ], outputCol="features")
@@ -36,7 +40,7 @@ consumer = KafkaConsumer(
     bootstrap_servers=['kafka:9092'],
     auto_offset_reset='earliest',
     group_id='ids-group',
-    value_deserializer=lambda x: json.loads(x.decode('utf-8'))
+    value_deserializer=deserialize_kafka_message  # استخدم الدالة العادية هنا
 )
 
 print("PROCESSOR ONLY STARTED – Waiting for packets from Kafka...")

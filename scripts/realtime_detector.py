@@ -28,8 +28,9 @@ def handle(pkt):
     ip = pkt[IP]
 
     # تجاهل باكتات Kafka
-    if pkt.haslayer(TCP) and (pkt[TCP].sport == 9092 or pkt[TCP].dport == 9092):
-        return
+    if pkt.haslayer(TCP):
+        if pkt[TCP].dport in [9092, 7077] or pkt[TCP].sport in [9092, 7077]:
+            return
 
     src_port = dst_port = tcp_flags = 0
     if pkt.haslayer(TCP):
