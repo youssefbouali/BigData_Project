@@ -179,51 +179,10 @@ def save_to_csv():
                     record["protocol"],
                     record["is_anomaly"],
                     record["anomaly_score"],
-                    record["timestamp"]
-                    #datetime.now().isoformat()
+                    datetime.now().isoformat()
                 ])
         
-        
-        from pyspark.sql.types import StructType, StructField, StringType, IntegerType, FloatType
-
-        schema = StructType([
-            StructField("src_ip", StringType(), True),
-            StructField("dst_ip", StringType(), True),
-            StructField("src_port", IntegerType(), True),
-            StructField("dst_port", IntegerType(), True),
-            StructField("protocol", StringType(), True),
-            StructField("is_anomaly", IntegerType(), True),
-            StructField("anomaly_score", FloatType(), True),
-            StructField("timestamp", StringType(), True)
-        ])
-
-        df = spark.createDataFrame(results_cache, schema)
-
-        
-        df_clean = df \
-            .withColumn("src_ip", trim(col("src_ip"))) \
-            .withColumn("dst_ip", trim(col("dst_ip"))) \
-            .withColumn("src_port", col("src_port").cast("int")) \
-            .withColumn("dst_port", col("dst_port").cast("int")) \
-            .withColumn("protocol", col("protocol").cast("int")) \
-            .withColumn("is_anomaly", col("is_anomaly").cast("int")) \
-            .withColumn("anomaly_score", col("anomaly_score").cast("double")) \
-            .withColumn("ingestion_time", to_timestamp(col("timestamp")))  # تحويل ISO8601 → TIMESTAMP
-
-        # حذف العمود القديم
-        df_clean = df_clean.drop("timestamp")
-
-
-        df_clean.write \
-            .format("org.apache.spark.sql.cassandra") \
-            .options(table="predictions", keyspace="netflow") \
-            .mode("append") \
-            .save()
-        
-        
-        
-        
-        #csv_to_cassandra(random_name)
+        csv_to_cassandra(random_name)
         print(f"✓ Saved {len(results_cache)} records to CSV")
         results_cache.clear()
     except Exception as e:
@@ -327,8 +286,7 @@ def predict_packet(pkt):
             "dst_port": dst_port,
             "protocol": proto,
             "is_anomaly": int(result.prediction),
-            "anomaly_score": prob,
-            "timestamp": datetime.now().isoformat()
+            "anomaly_score": prob
         }
         
         results_cache.append(record)
