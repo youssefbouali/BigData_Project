@@ -1,22 +1,14 @@
-# /scripts/realtime_netflow_predictor_final.py
-# النسخة النهائية 100% شغالة بدون أي خطأ (حل مشكلة cloudpickle + scapy)
-
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import lit, current_timestamp
-from pyspark.sql.types import *
+from pyspark.sql.functions import lit
 from pyspark.ml.classification import RandomForestClassificationModel
 from pyspark.ml.feature import VectorAssembler
-from scapy.all import sniff, IP, TCP, UDP
-from queue import Queue
-from threading import Thread
-from datetime import datetime
+from scapy.all import sniff, IP, TCP, UDP, ICMP
 import time
+from datetime import datetime
 
-# ===================================================================
-# Spark Session + Cassandra
-# ===================================================================
+# Spark Session
 spark = SparkSession.builder \
-    .appName("RealTime Detector - Final Fixed") \
+    .appName("IDS Processor Only") \
     .master("local[*]") \
     .config("spark.driver.memory", "4g") \
     .config("spark.cassandra.connection.host", "cassandra") \
@@ -24,166 +16,139 @@ spark = SparkSession.builder \
     .config("spark.cassandra.auth.password", "cassandra") \
     .getOrCreate()
 
-print("Loading model...")
-model = RandomForestClassificationModel.load("/model/anomaly_detection_model_rf.spark")  # تأكد من الاسم ده
+print("Loading model from /model/anomaly_detection_model_rf.spark ...")
+model = RandomForestClassificationModel.load("/model/anomaly_detection_model_rf.spark")
 print("Model loaded successfully!")
 
-assembler = VectorAssembler(inputCols=[
-    "L4_SRC_PORT","L4_DST_PORT","PROTOCOL","L7_PROTO","IN_BYTES","IN_PKTS",
-    "OUT_BYTES","OUT_PKTS","TCP_FLAGS","CLIENT_TCP_FLAGS","SERVER_TCP_FLAGS",
-    "FLOW_DURATION_MILLISECONDS","DURATION_IN","DURATION_OUT","MIN_TTL","MAX_TTL",
-    "LONGEST_FLOW_PKT","SHORTEST_FLOW_PKT","MIN_IP_PKT_LEN","MAX_IP_PKT_LEN",
-    "SRC_TO_DST_SECOND_BYTES","DST_TO_SRC_SECOND_BYTES","RETRANSMITTED_IN_BYTES",
-    "RETRANSMITTED_IN_PKTS","RETRANSMITTED_OUT_BYTES","RETRANSMITTED_OUT_PKTS",
-    "SRC_TO_DST_AVG_THROUGHPUT","DST_TO_SRC_AVG_THROUGHPUT","NUM_PKTS_UP_TO_128_BYTES",
-    "NUM_PKTS_128_TO_256_BYTES","NUM_PKTS_256_TO_512_BYTES","NUM_PKTS_512_TO_1024_BYTES",
-    "NUM_PKTS_1024_TO_1514_BYTES","TCP_WIN_MAX_IN","TCP_WIN_MAX_OUT","ICMP_TYPE",
-    "ICMP_IPV4_TYPE","DNS_QUERY_ID","DNS_QUERY_TYPE","DNS_TTL_ANSWER","FTP_COMMAND_RET_CODE"
-], outputCol="features")
+input_cols = [
+    "L4_SRC_PORT", "L4_DST_PORT", "PROTOCOL", "L7_PROTO", "IN_BYTES", "IN_PKTS",
+    "OUT_BYTES", "OUT_PKTS", "TCP_FLAGS", "CLIENT_TCP_FLAGS", "SERVER_TCP_FLAGS",
+    "FLOW_DURATION_MILLISECONDS", "DURATION_IN", "DURATION_OUT", "MIN_TTL", "MAX_TTL",
+    "LONGEST_FLOW_PKT", "SHORTEST_FLOW_PKT", "MIN_IP_PKT_LEN", "MAX_IP_PKT_LEN",
+    "SRC_TO_DST_SECOND_BYTES", "DST_TO_SRC_SECOND_BYTES", "RETRANSMITTED_IN_BYTES",
+    "RETRANSMITTED_IN_PKTS", "RETRANSMITTED_OUT_BYTES", "RETRANSMITTED_OUT_PKTS",
+    "SRC_TO_DST_AVG_THROUGHPUT", "DST_TO_SRC_AVG_THROUGHPUT", "NUM_PKTS_UP_TO_128_BYTES",
+    "NUM_PKTS_128_TO_256_BYTES", "NUM_PKTS_256_TO_512_BYTES", "NUM_PKTS_512_TO_1024_BYTES",
+    "NUM_PKTS_1024_TO_1514_BYTES", "TCP_WIN_MAX_IN", "TCP_WIN_MAX_OUT", "ICMP_TYPE",
+    "ICMP_IPV4_TYPE", "DNS_QUERY_ID", "DNS_QUERY_TYPE", "DNS_TTL_ANSWER", "FTP_COMMAND_RET_CODE"
+]
 
-# Queue لتخزين الباكتات الخام (بس بيانات بسيطة)
-packet_queue = Queue()
+assembler = VectorAssembler(inputCols=input_cols, outputCol="features")
 
-# تحويل IP → int
-def ip_to_int(ip):
-    try:
-        return sum(int(x) << (24 - 8*i) for i, x in enumerate(ip.split('.')))
-    except:
-        return 0
+# إضافة batch كمتغير global
+batch = []
 
-# دالة خفيفة جدًا (مش بتستخدم spark ولا model) → آمنة مع scapy
-def light_packet_handler(pkt):
+def predict_packet(pkt):
     if not pkt.haslayer(IP):
         return
+
+    ip = pkt[IP]
+    src_ip = ip.src
+    dst_ip = ip.dst
+    proto = ip.proto
+    pkt_len = len(pkt)
+    ttl = ip.ttl
+
+    # Ports
+    src_port = dst_port = 0
+    tcp_flags = 0
+    if pkt.haslayer(TCP):
+        src_port = pkt[TCP].sport
+        dst_port = pkt[TCP].dport
+        tcp_flags = int(pkt[TCP].flags)
+    elif pkt.haslayer(UDP):
+        src_port = pkt[UDP].sport
+        dst_port = pkt[UDP].dport
+    elif pkt.haslayer(ICMP):
+        proto = 1
+
+    # إنشاء DataFrame
+    df = spark.range(1).drop("id")
+
+    df = df.withColumn("L4_SRC_PORT", lit(src_port)) \
+           .withColumn("L4_DST_PORT", lit(dst_port)) \
+           .withColumn("PROTOCOL", lit(proto)) \
+           .withColumn("L7_PROTO", lit(80.0 if dst_port in [80,443] else 0.0)) \
+           .withColumn("IN_BYTES", lit(pkt_len * 15)) \
+           .withColumn("IN_PKTS", lit(15)) \
+           .withColumn("OUT_BYTES", lit(pkt_len * 12)) \
+           .withColumn("OUT_PKTS", lit(12)) \
+           .withColumn("TCP_FLAGS", lit(tcp_flags)) \
+           .withColumn("CLIENT_TCP_FLAGS", lit(tcp_flags)) \
+           .withColumn("SERVER_TCP_FLAGS", lit(tcp_flags)) \
+           .withColumn("FLOW_DURATION_MILLISECONDS", lit(800)) \
+           .withColumn("DURATION_IN", lit(400)) \
+           .withColumn("DURATION_OUT", lit(400)) \
+           .withColumn("MIN_TTL", lit(ttl)) \
+           .withColumn("MAX_TTL", lit(ttl)) \
+           .withColumn("LONGEST_FLOW_PKT", lit(pkt_len)) \
+           .withColumn("SHORTEST_FLOW_PKT", lit(pkt_len)) \
+           .withColumn("MIN_IP_PKT_LEN", lit(pkt_len)) \
+           .withColumn("MAX_IP_PKT_LEN", lit(pkt_len)) \
+           .withColumn("SRC_TO_DST_SECOND_BYTES", lit(pkt_len * 20.0)) \
+           .withColumn("DST_TO_SRC_SECOND_BYTES", lit(pkt_len * 15.0)) \
+           .withColumn("RETRANSMITTED_IN_BYTES", lit(0)) \
+           .withColumn("RETRANSMITTED_IN_PKTS", lit(0)) \
+           .withColumn("RETRANSMITTED_OUT_BYTES", lit(0)) \
+           .withColumn("RETRANSMITTED_OUT_PKTS", lit(0)) \
+           .withColumn("SRC_TO_DST_AVG_THROUGHPUT", lit(5000000.0)) \
+           .withColumn("DST_TO_SRC_AVG_THROUGHPUT", lit(4000000.0)) \
+           .withColumn("NUM_PKTS_UP_TO_128_BYTES", lit(10 if pkt_len <= 128 else 0)) \
+           .withColumn("NUM_PKTS_128_TO_256_BYTES", lit(3 if 128 < pkt_len <= 256 else 0)) \
+           .withColumn("NUM_PKTS_256_TO_512_BYTES", lit(1 if 256 < pkt_len <= 512 else 0)) \
+           .withColumn("NUM_PKTS_512_TO_1024_BYTES", lit(1 if 512 < pkt_len <= 1024 else 0)) \
+           .withColumn("NUM_PKTS_1024_TO_1514_BYTES", lit(1 if pkt_len > 1024 else 0)) \
+           .withColumn("TCP_WIN_MAX_IN", lit(65535)) \
+           .withColumn("TCP_WIN_MAX_OUT", lit(65535)) \
+           .withColumn("ICMP_TYPE", lit(8 if proto == 1 else 0)) \
+           .withColumn("ICMP_IPV4_TYPE", lit(8 if proto == 1 else 0)) \
+           .withColumn("DNS_QUERY_ID", lit(0)) \
+           .withColumn("DNS_QUERY_TYPE", lit(0)) \
+           .withColumn("DNS_TTL_ANSWER", lit(0)) \
+           .withColumn("FTP_COMMAND_RET_CODE", lit(0.0))
+
+    # Vector + Predict
     try:
-        ip = pkt[IP]
-        src_ip = ip.src
-        dst_ip = ip.dst
-        proto = ip.proto
-        pkt_len = len(pkt)
+        vec = assembler.transform(df)
+        result = model.transform(vec).select("prediction", "probability").collect()[0]
+        label = "ATTACK" if result.prediction == 1 else "BENIGN"
+        prob = float(result.probability[1]) * 100
 
-        src_port = dst_port = tcp_flags = 0
-        if pkt.haslayer(TCP):
-            src_port = pkt[TCP].sport
-            dst_port = pkt[TCP].dport
-            tcp_flags = int(pkt[TCP].flags)
-        elif pkt.haslayer(UDP):
-            src_port = pkt[UDP].sport
-            dst_port = pkt[UDP].dport
-
-        packet_queue.put({
+        # إصلاح عملية حفظ البيانات
+        record = {
             "src_ip": src_ip,
             "dst_ip": dst_ip,
             "src_port": src_port,
             "dst_port": dst_port,
             "protocol": proto,
-            "pkt_len": pkt_len,
-            "tcp_flags": tcp_flags,
-            "timestamp": time.time()
-        })
-    except:
-        pass  # تجاهل أي باكت مش مفهوم
+            "is_anomaly": int(result.prediction),
+            "anomaly_score": prob,  # استخدام prob بدلاً من score
+            "ingestion_time": datetime.now()
+        }
+        
+        batch.append(record)
 
-# دالة ثقيلة (بتستخدم Spark) → تشتغل في thread منفصل
-def heavy_processor():
-    schema = StructType([
-        StructField("src_ip_int", IntegerType()),
-        StructField("dst_ip_int", IntegerType()),
-        StructField("src_port", IntegerType()),
-        StructField("dst_port", IntegerType()),
-        StructField("protocol", IntegerType()),
-        StructField("in_bytes", LongType()),
-        StructField("out_bytes", LongType()),
-        StructField("duration_ms", LongType()),
-        StructField("is_anomaly", IntegerType()),
-        StructField("anomaly_score", DoubleType()),
-        StructField("ingestion_time", TimestampType())
-    ])
+        if len(batch) >= 10:
+            spark.createDataFrame(batch).write \
+                .format("org.apache.spark.sql.cassandra") \
+                .option("table", "predictions") \
+                .option("keyspace", "netflow") \
+                .mode("append").save()
+            print(f"Saved {len(batch)} records to Cassandra")
+            batch.clear()  # استخدام clear بدلاً من تعيين قائمة فارغة
 
-    batch = []
-    while True:
-        while not packet_queue.empty():
-            pkt = packet_queue.get()
-            row = {
-                "src_ip_int": ip_to_int(pkt["src_ip"]),
-                "dst_ip_int": ip_to_int(pkt["dst_ip"]),
-                "src_port": pkt["src_port"],
-                "dst_port": pkt["dst_port"],
-                "protocol": pkt["protocol"],
-                "in_bytes": pkt["pkt_len"] * 18,
-                "out_bytes": pkt["pkt_len"] * 14,
-                "duration_ms": 1000,
-                # فيتشورز للتنبؤ
-                "L4_SRC_PORT": float(pkt["src_port"]),
-                "L4_DST_PORT": float(pkt["dst_port"]),
-                "PROTOCOL": float(pkt["protocol"]),
-                "L7_PROTO": 443.0 if pkt["dst_port"] == 443 else 80.0 if pkt["dst_port"] in [80,8080] else 0.0,
-                "IN_BYTES": float(pkt["pkt_len"] * 18),
-                "IN_PKTS": 18.0,
-                "OUT_BYTES": float(pkt["pkt_len"] * 14),
-                "OUT_PKTS": 14.0,
-                "TCP_FLAGS": float(pkt["tcp_flags"]),
-                "CLIENT_TCP_FLAGS": float(pkt["tcp_flags"]),
-                "SERVER_TCP_FLAGS": float(pkt["tcp_flags"]),
-                "FLOW_DURATION_MILLISECONDS": 1000.0,
-                "DURATION_IN": 500.0, "DURATION_OUT": 500.0,
-                "MIN_TTL": 64.0, "MAX_TTL": 64.0,
-                "LONGEST_FLOW_PKT": float(pkt["pkt_len"]), "SHORTEST_FLOW_PKT": float(pkt["pkt_len"]),
-                "MIN_IP_PKT_LEN": float(pkt["pkt_len"]), "MAX_IP_PKT_LEN": float(pkt["pkt_len"]),
-                "SRC_TO_DST_SECOND_BYTES": float(pkt["pkt_len"] * 25),
-                "DST_TO_SRC_SECOND_BYTES": float(pkt["pkt_len"] * 20),
-                "RETRANSMITTED_IN_BYTES": 0.0, "RETRANSMITTED_IN_PKTS": 0.0,
-                "RETRANSMITTED_OUT_BYTES": 0.0, "RETRANSMITTED_OUT_PKTS": 0.0,
-                "SRC_TO_DST_AVG_THROUGHPUT": 8000000.0,
-                "DST_TO_SRC_AVG_THROUGHPUT": 7000000.0,
-                "NUM_PKTS_UP_TO_128_BYTES": 12.0 if pkt["pkt_len"] <= 128 else 0.0,
-                "NUM_PKTS_128_TO_256_BYTES": 4.0 if 128 < pkt["pkt_len"] <= 256 else 0.0,
-                "NUM_PKTS_256_TO_512_BYTES": 2.0 if 256 < pkt["pkt_len"] <= 512 else 0.0,
-                "NUM_PKTS_512_TO_1024_BYTES": 1.0 if 512 < pkt["pkt_len"] <= 1024 else 0.0,
-                "NUM_PKTS_1024_TO_1514_BYTES": 1.0 if pkt["pkt_len"] > 1024 else 0.0,
-                "TCP_WIN_MAX_IN": 65535.0, "TCP_WIN_MAX_OUT": 65535.0,
-                "ICMP_TYPE": 8.0 if pkt["protocol"] == 1 else 0.0,
-                "ICMP_IPV4_TYPE": 8.0 if pkt["protocol"] == 1 else 0.0,
-                "DNS_QUERY_ID": 0.0, "DNS_QUERY_TYPE": 0.0, "DNS_TTL_ANSWER": 0.0, "FTP_COMMAND_RET_CODE": 0.0
-            }
-            batch.append(row)
+        print("\n" + "="*90)
+        print(f" REAL-TIME DETECTION | {src_ip}:{src_port} → {dst_ip}:{dst_port} (Proto: {proto})")
+        print(f" PREDICTION → {label} | Attack Probability: {prob:.2f}%")
+        if label == "ATTACK":
+            print(" MALICIOUS TRAFFIC DETECTED! BLOCK THIS FLOW NOW!")
+        print("="*90)
+    except Exception as e:
+        print(f"Prediction error: {e}")
 
-        if batch:
-            try:
-                df = spark.createDataFrame(batch)
-                vec = assembler.transform(df)
-                predictions = model.transform(vec)
-                result = predictions.select("prediction", "probability").collect()
+# بدء التقاط الباكتات
+print("Starting real-time detection (every packet triggers prediction)...")
+print("Try: curl google.com   OR   hping3 --flood ...   inside/outside the container")
+sniff(prn=predict_packet, store=False, iface="eth0")
 
-                # طباعة + حفظ
-                save_df = df.select(
-                    "src_ip_int", "dst_ip_int", "src_port", "dst_port", "protocol",
-                    "in_bytes", "out_bytes", "duration_ms"
-                ).withColumn("ingestion_time", current_timestamp())
-
-                for i, row in enumerate(result):
-                    score = float(row.probability[1])
-                    label = "ATTACK" if row.prediction == 1 else "BENIGN"
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] {batch[i]['src_ip']}:{batch[i]['src_port']} → {batch[i]['dst_ip']}:{batch[i]['dst_port']} | {label} ({score:.4f})")
-                    if row.prediction == 1:
-                        print(" MALICIOUS TRAFFIC DETECTED!")
-
-                # حفظ في Cassandra
-                save_df.withColumn("is_anomaly", (col("in_bytes") > 10000).cast("int")) \
-                       .withColumn("anomaly_score", lit(0.0)) \
-                       .write.format("org.apache.spark.sql.cassandra") \
-                       .options(table="predictions", keyspace="netflow") \
-                       .mode("append").save()
-
-                print(f"Saved {len(batch)} records to Cassandra")
-                batch.clear()
-            except Exception as e:
-                print(f"Error saving batch: {e}")
-        time.sleep(2)
-
-# بدء المعالج الثقيل في الخلفية
-Thread(target=heavy_processor, daemon=True).start()
-
-# بدء التقاط الباكتات بالدالة الخفيفة
-print("REAL-TIME DETECTION STARTED - 100% STABLE")
-sniff(prn=light_packet_handler, store=False, iface="eth0")
+spark.stop()
