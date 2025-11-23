@@ -22,6 +22,9 @@ spark = SparkSession.builder \
     .config("spark.cassandra.concurrent.writes", "1") \
     .getOrCreate()
 
+
+#    .config("spark.sql.shuffle.partitions", "50") \
+
 # تقليل مستوى التسجيل
 spark.sparkContext.setLogLevel("ERROR")
 
@@ -111,14 +114,58 @@ def save_to_cassandra():
     except Exception as e:
         print(f"✗ Failed to save to Cassandra: {str(e)[:200]}")
 
+
+
+
+
+from pyspark.sql.functions import col, trim, to_timestamp
+
+def csv_to_cassandra(name):
+    CSV_PATH = "/data/"+name+".csv"
+
+    df = spark.read.option("header", "true") \
+                   .option("inferSchema", "false") \
+                   .csv(CSV_PATH)
+
+    # ===================================================================
+    # Nettoyage léger + conversion types
+    # ===================================================================
+    df_clean = df \
+        .withColumn("src_ip", trim(col("src_ip"))) \
+        .withColumn("dst_ip", trim(col("dst_ip"))) \
+        .withColumn("src_port", col("src_port").cast("int")) \
+        .withColumn("dst_port", col("dst_port").cast("int")) \
+        .withColumn("protocol", col("protocol").cast("int")) \
+        .withColumn("is_anomaly", col("is_anomaly").cast("int")) \
+        .withColumn("anomaly_score", col("anomaly_score").cast("double")) \
+        .withColumn("ingestion_time", to_timestamp(col("timestamp")))  # تحويل ISO8601 → TIMESTAMP
+
+    # حذف العمود القديم
+    df_clean = df_clean.drop("timestamp")
+
+
+    df_clean.write \
+        .format("org.apache.spark.sql.cassandra") \
+        .options(table="predictions", keyspace="netflow") \
+        .mode("append") \
+        .save()
+    os.remove("/data/"+name+".csv")
+
+
+
+
+import uuid
+
+
 def save_to_csv():
     """حفظ النتائج إلى ملف CSV مؤقتاً"""
     if not results_cache:
         return
     
     try:
-        file_exists = os.path.isfile('/data/predictions.csv')
-        with open('/data/predictions.csv', 'a', newline='') as f:
+        random_name = uuid.uuid4().hex
+        file_exists = os.path.isfile(f"/data/predictions_{random_name}.csv")
+        with open(f"/data/predictions_{random_name}.csv", 'a', newline='') as f:
             writer = csv.writer(f)
             if not file_exists:
                 writer.writerow(['src_ip', 'dst_ip', 'src_port', 'dst_port', 'protocol', 'is_anomaly', 'anomaly_score', 'timestamp'])
@@ -134,11 +181,21 @@ def save_to_csv():
                     record["anomaly_score"],
                     datetime.now().isoformat()
                 ])
-        
+        csv_to_cassandra(random_name)
         print(f"✓ Saved {len(results_cache)} records to CSV")
         results_cache.clear()
     except Exception as e:
         print(f"✗ Failed to save to CSV: {e}")
+
+
+
+
+
+
+
+
+
+
 
 # ثم استبدل save_to_cassandra() بـ save_to_csv() في الكود
 
