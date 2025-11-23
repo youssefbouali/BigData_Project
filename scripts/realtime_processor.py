@@ -13,7 +13,7 @@ from pyspark.ml.feature import VectorAssembler
 spark = SparkSession.builder \
     .appName("RealTime IDS - Structured Streaming + Kafka") \
     .master("spark://spark-master:7077") \
-    .config("spark.driver.memory", "6g") \
+    .config("spark.driver.memory", "4g") \
     .config("spark.executor.memory", "4g") \
     .config("spark.cassandra.connection.host", "cassandra") \
     .config("spark.cassandra.auth.username", "cassandra") \
