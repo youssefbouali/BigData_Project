@@ -1,15 +1,12 @@
-# /scripts/realtime_capture_redis.py
-# Captures packets and pushes them to Redis (ignores Redis traffic)
+# /scripts/capture_only.py
+# بس يلتقط ويرسل لـ Kafka – مفيش أي Spark ولا scapy مع Spark
 
 from scapy.all import sniff, IP, TCP, UDP
-import redis
+from kafka import KafkaProducer
 import json
 import socket
 import struct
 import time
-
-# Connect to Redis (make sure redis service exists in docker-compose)
-r = redis.Redis(host='172.17.0.1', port=6379, db=0, decode_responses=False)
 
 def ip_to_int(ip):
     try:
@@ -17,14 +14,21 @@ def ip_to_int(ip):
     except:
         return 0
 
-def handle_packet(pkt):
-    if not pkt.haslayer(IP):
-        return
+producer = KafkaProducer(
+    bootstrap_servers=['kafka:9092'],
+    value_serializer=lambda v: json.dumps(v).encode('utf-8'),
+    acks=0,
+    linger_ms=1
+)
 
+topic = "packets_raw"
+
+def handle(pkt):
+    if not pkt.haslayer(IP): return
     ip = pkt[IP]
 
-    # Ignore Redis traffic (port 6379) to prevent loop
-    if pkt.haslayer(TCP) and (pkt[TCP].dport == 6379 or pkt[TCP].sport == 6379):
+    # تجاهل باكتات Kafka
+    if pkt.haslayer(TCP) and (pkt[TCP].sport == 9092 or pkt[TCP].dport == 9092):
         return
 
     src_port = dst_port = tcp_flags = 0
@@ -36,7 +40,7 @@ def handle_packet(pkt):
         src_port = pkt[UDP].sport
         dst_port = pkt[UDP].dport
 
-    packet_data = {
+    data = {
         "src_ip": ip.src,
         "dst_ip": ip.dst,
         "src_ip_int": ip_to_int(ip.src),
@@ -49,10 +53,8 @@ def handle_packet(pkt):
         "ttl": ip.ttl,
         "timestamp": time.time()
     }
+    producer.send(topic, value=data)
+    print(f"→ {ip.src}:{src_port} → {ip.dst}:{dst_port}")
 
-    # Push to Redis list (queue)
-    r.rpush("packets_queue", json.dumps(packet_data))
-    print(f"→ {ip.src}:{src_port} → {ip.dst}:{dst_port} (Len: {len(pkt)})")
-
-print("REAL-TIME PACKET CAPTURE → Redis STARTED (port 6379 traffic ignored)")
-sniff(prn=handle_packet, store=False, iface="eth0")
+print("CAPTURE ONLY STARTED → Kafka (no Spark here!)")
+sniff(prn=handle, store=False, iface="eth0")
