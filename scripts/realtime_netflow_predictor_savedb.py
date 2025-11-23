@@ -54,71 +54,13 @@ results_cache = []
 import csv
 import os
 
-def save_to_cassandra():
-    """حفظ النتائج إلى Cassandra بشكل منفصل"""
-    if not results_cache:
-        return
-    
-    try:
-        # إنشاء بيانات متوافقة مع جدول Cassandra
-        data = []
-        for record in results_cache:
-            # تحويل IP إلى integer (طريقة بسيطة)
-            src_ip_int = sum(int(x) * (256 ** i) for i, x in enumerate(reversed(record["src_ip"].split('.'))))
-            dst_ip_int = sum(int(x) * (256 ** i) for i, x in enumerate(reversed(record["dst_ip"].split('.'))))
-            
-            data.append((
-                src_ip_int,
-                datetime.now(),
-                dst_ip_int,
-                record["src_port"],
-                record["dst_port"],
-                record["protocol"],
-                0,  # in_bytes (قيمة افتراضية)
-                0,  # out_bytes (قيمة افتراضية) 
-                0,  # duration_ms (قيمة افتراضية)
-                record["is_anomaly"],
-                record["anomaly_score"]
-            ))
-        
-        # إنشاء schema متوافق
-        from pyspark.sql.types import StructType, StructField, IntegerType, DoubleType, TimestampType
-        
-        schema = StructType([
-            StructField("src_ip_int", IntegerType(), True),
-            StructField("ingestion_time", TimestampType(), True),
-            StructField("dst_ip_int", IntegerType(), True),
-            StructField("src_port", IntegerType(), True),
-            StructField("dst_port", IntegerType(), True),
-            StructField("protocol", IntegerType(), True),
-            StructField("in_bytes", IntegerType(), True),
-            StructField("out_bytes", IntegerType(), True),
-            StructField("duration_ms", IntegerType(), True),
-            StructField("is_anomaly", IntegerType(), True),
-            StructField("anomaly_score", DoubleType(), True)
-        ])
-        
-        df = spark.createDataFrame(data, schema)
-        
-        # محاولة الحفظ إلى Cassandra
-        df.write \
-            .format("org.apache.spark.sql.cassandra") \
-            .option("table", "predictions") \
-            .option("keyspace", "netflow") \
-            .mode("append") \
-            .save()
-        
-        print(f"✓ Saved {len(results_cache)} records to Cassandra")
-        results_cache.clear()
-        
-    except Exception as e:
-        print(f"✗ Failed to save to Cassandra: {str(e)[:200]}")
-
-
 
 
 
 from pyspark.sql.functions import col, trim, to_timestamp
+
+
+import uuid
 
 def csv_to_cassandra(name):
     CSV_PATH = "/data/predictions_"+name+".csv"
@@ -154,10 +96,9 @@ def csv_to_cassandra(name):
 
 
 
-import uuid
 
 
-def save_to_csv():
+def save_to_cassandra():
     """حفظ النتائج إلى ملف CSV مؤقتاً"""
     if not results_cache:
         return
@@ -187,6 +128,44 @@ def save_to_csv():
         results_cache.clear()
     except Exception as e:
         print(f"✗ Failed to save to CSV: {e}")
+
+
+
+
+
+
+
+
+
+def save_to_csv():
+    CSV_PATH = "/data/predictions.csv"
+
+    df = spark.read.option("header", "true") \
+                   .option("inferSchema", "false") \
+                   .csv(CSV_PATH)
+
+    # ===================================================================
+    # Nettoyage léger + conversion types
+    # ===================================================================
+    df_clean = df \
+        .withColumn("src_ip", trim(col("src_ip"))) \
+        .withColumn("dst_ip", trim(col("dst_ip"))) \
+        .withColumn("src_port", col("src_port").cast("int")) \
+        .withColumn("dst_port", col("dst_port").cast("int")) \
+        .withColumn("protocol", col("protocol").cast("int")) \
+        .withColumn("is_anomaly", col("is_anomaly").cast("int")) \
+        .withColumn("anomaly_score", col("anomaly_score").cast("double")) \
+        .withColumn("ingestion_time", to_timestamp(col("timestamp")))  # تحويل ISO8601 → TIMESTAMP
+
+    # حذف العمود القديم
+    df_clean = df_clean.drop("timestamp")
+
+
+    df_clean.write \
+        .format("org.apache.spark.sql.cassandra") \
+        .options(table="predictions", keyspace="netflow") \
+        .mode("append") \
+        .save()
 
 
 
@@ -301,6 +280,7 @@ def predict_packet(pkt):
 
         # حفظ إلى Cassandra كل 5 نتائج
         if len(results_cache) >= 5:
+            save_to_cassandra()
             save_to_csv()
 
     except Exception as e:
@@ -317,6 +297,7 @@ except KeyboardInterrupt:
     print("\n🛑 Stopping real-time detection...")
     # حفظ أي نتائج متبقية
     if results_cache:
+        save_to_cassandra()
         save_to_csv()
 finally:
     spark.stop()
