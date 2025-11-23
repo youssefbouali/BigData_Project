@@ -1,20 +1,29 @@
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import lit
+from pyspark.sql.functions import lit, current_timestamp
 from pyspark.ml.classification import RandomForestClassificationModel
 from pyspark.ml.feature import VectorAssembler
 from scapy.all import sniff, IP, TCP, UDP, ICMP
 import time
 from datetime import datetime
 
-# Spark Session
+# تهيئة Spark Session مع إعدادات أفضل
 spark = SparkSession.builder \
-    .appName("IDS Processor Only") \
+    .appName("RealTimeNetflowPredictor") \
     .master("local[*]") \
-    .config("spark.driver.memory", "4g") \
+    .config("spark.driver.memory", "2g") \
+    .config("spark.executor.memory", "2g") \
+    .config("spark.sql.adaptive.enabled", "true") \
+    .config("spark.sql.adaptive.coalescePartitions.enabled", "true") \
+    .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer") \
     .config("spark.cassandra.connection.host", "cassandra") \
     .config("spark.cassandra.auth.username", "cassandra") \
     .config("spark.cassandra.auth.password", "cassandra") \
+    .config("spark.cassandra.output.batch.size.rows", "1") \
+    .config("spark.cassandra.concurrent.writes", "1") \
     .getOrCreate()
+
+# تقليل مستوى التسجيل
+spark.sparkContext.setLogLevel("ERROR")
 
 print("Loading model from /model/anomaly_detection_model_rf.spark ...")
 model = RandomForestClassificationModel.load("/model/anomaly_detection_model_rf.spark")
@@ -35,86 +44,139 @@ input_cols = [
 
 assembler = VectorAssembler(inputCols=input_cols, outputCol="features")
 
-# إضافة batch كمتغير global
-batch = []
+# تخزين محلي للنتائج بدلاً من Cassandra مؤقتاً
+results_cache = []
+
+def save_to_cassandra():
+    """حفظ النتائج إلى Cassandra بشكل منفصل"""
+    if not results_cache:
+        return
+    
+    try:
+        # إنشاء DataFrame من النتائج المتراكمة
+        data = []
+        for record in results_cache:
+            data.append((
+                record["src_ip"],
+                record["dst_ip"],
+                record["src_port"],
+                record["dst_port"],
+                record["protocol"],
+                record["is_anomaly"],
+                record["anomaly_score"],
+                datetime.now()
+            ))
+        
+        # إنشاء DataFrame مع مخطط محدد
+        from pyspark.sql.types import StructType, StructField, StringType, IntegerType, DoubleType, TimestampType
+        
+        schema = StructType([
+            StructField("src_ip", StringType(), True),
+            StructField("dst_ip", StringType(), True),
+            StructField("src_port", IntegerType(), True),
+            StructField("dst_port", IntegerType(), True),
+            StructField("protocol", IntegerType(), True),
+            StructField("is_anomaly", IntegerType(), True),
+            StructField("anomaly_score", DoubleType(), True),
+            StructField("ingestion_time", TimestampType(), True)
+        ])
+        
+        df = spark.createDataFrame(data, schema)
+        
+        # محاولة الحفظ إلى Cassandra
+        df.write \
+            .format("org.apache.spark.sql.cassandra") \
+            .option("table", "predictions") \
+            .option("keyspace", "netflow") \
+            .mode("append") \
+            .save()
+        
+        print(f"✓ Saved {len(results_cache)} records to Cassandra")
+        results_cache.clear()
+        
+    except Exception as e:
+        print(f"✗ Failed to save to Cassandra: {e}")
+        # استمر في العمل حتى لو فشل الحفظ
 
 def predict_packet(pkt):
+    """معالجة حزمة شبكة واحدة"""
     if not pkt.haslayer(IP):
         return
 
-    ip = pkt[IP]
-    src_ip = ip.src
-    dst_ip = ip.dst
-    proto = ip.proto
-    pkt_len = len(pkt)
-    ttl = ip.ttl
-
-    # Ports
-    src_port = dst_port = 0
-    tcp_flags = 0
-    if pkt.haslayer(TCP):
-        src_port = pkt[TCP].sport
-        dst_port = pkt[TCP].dport
-        tcp_flags = int(pkt[TCP].flags)
-    elif pkt.haslayer(UDP):
-        src_port = pkt[UDP].sport
-        dst_port = pkt[UDP].dport
-    elif pkt.haslayer(ICMP):
-        proto = 1
-
-    # إنشاء DataFrame
-    df = spark.range(1).drop("id")
-
-    df = df.withColumn("L4_SRC_PORT", lit(src_port)) \
-           .withColumn("L4_DST_PORT", lit(dst_port)) \
-           .withColumn("PROTOCOL", lit(proto)) \
-           .withColumn("L7_PROTO", lit(80.0 if dst_port in [80,443] else 0.0)) \
-           .withColumn("IN_BYTES", lit(pkt_len * 15)) \
-           .withColumn("IN_PKTS", lit(15)) \
-           .withColumn("OUT_BYTES", lit(pkt_len * 12)) \
-           .withColumn("OUT_PKTS", lit(12)) \
-           .withColumn("TCP_FLAGS", lit(tcp_flags)) \
-           .withColumn("CLIENT_TCP_FLAGS", lit(tcp_flags)) \
-           .withColumn("SERVER_TCP_FLAGS", lit(tcp_flags)) \
-           .withColumn("FLOW_DURATION_MILLISECONDS", lit(800)) \
-           .withColumn("DURATION_IN", lit(400)) \
-           .withColumn("DURATION_OUT", lit(400)) \
-           .withColumn("MIN_TTL", lit(ttl)) \
-           .withColumn("MAX_TTL", lit(ttl)) \
-           .withColumn("LONGEST_FLOW_PKT", lit(pkt_len)) \
-           .withColumn("SHORTEST_FLOW_PKT", lit(pkt_len)) \
-           .withColumn("MIN_IP_PKT_LEN", lit(pkt_len)) \
-           .withColumn("MAX_IP_PKT_LEN", lit(pkt_len)) \
-           .withColumn("SRC_TO_DST_SECOND_BYTES", lit(pkt_len * 20.0)) \
-           .withColumn("DST_TO_SRC_SECOND_BYTES", lit(pkt_len * 15.0)) \
-           .withColumn("RETRANSMITTED_IN_BYTES", lit(0)) \
-           .withColumn("RETRANSMITTED_IN_PKTS", lit(0)) \
-           .withColumn("RETRANSMITTED_OUT_BYTES", lit(0)) \
-           .withColumn("RETRANSMITTED_OUT_PKTS", lit(0)) \
-           .withColumn("SRC_TO_DST_AVG_THROUGHPUT", lit(5000000.0)) \
-           .withColumn("DST_TO_SRC_AVG_THROUGHPUT", lit(4000000.0)) \
-           .withColumn("NUM_PKTS_UP_TO_128_BYTES", lit(10 if pkt_len <= 128 else 0)) \
-           .withColumn("NUM_PKTS_128_TO_256_BYTES", lit(3 if 128 < pkt_len <= 256 else 0)) \
-           .withColumn("NUM_PKTS_256_TO_512_BYTES", lit(1 if 256 < pkt_len <= 512 else 0)) \
-           .withColumn("NUM_PKTS_512_TO_1024_BYTES", lit(1 if 512 < pkt_len <= 1024 else 0)) \
-           .withColumn("NUM_PKTS_1024_TO_1514_BYTES", lit(1 if pkt_len > 1024 else 0)) \
-           .withColumn("TCP_WIN_MAX_IN", lit(65535)) \
-           .withColumn("TCP_WIN_MAX_OUT", lit(65535)) \
-           .withColumn("ICMP_TYPE", lit(8 if proto == 1 else 0)) \
-           .withColumn("ICMP_IPV4_TYPE", lit(8 if proto == 1 else 0)) \
-           .withColumn("DNS_QUERY_ID", lit(0)) \
-           .withColumn("DNS_QUERY_TYPE", lit(0)) \
-           .withColumn("DNS_TTL_ANSWER", lit(0)) \
-           .withColumn("FTP_COMMAND_RET_CODE", lit(0.0))
-
-    # Vector + Predict
     try:
+        ip = pkt[IP]
+        src_ip = ip.src
+        dst_ip = ip.dst
+        proto = ip.proto
+        pkt_len = len(pkt)
+        ttl = ip.ttl
+
+        # استخراج المنافذ
+        src_port = dst_port = 0
+        tcp_flags = 0
+        if pkt.haslayer(TCP):
+            src_port = pkt[TCP].sport
+            dst_port = pkt[TCP].dport
+            tcp_flags = int(pkt[TCP].flags)
+        elif pkt.haslayer(UDP):
+            src_port = pkt[UDP].sport
+            dst_port = pkt[UDP].dport
+        elif pkt.haslayer(ICMP):
+            proto = 1
+
+        # إنشاء DataFrame ببيانات افتراضية
+        df = spark.range(1).drop("id")
+
+        df = df.withColumn("L4_SRC_PORT", lit(src_port)) \
+               .withColumn("L4_DST_PORT", lit(dst_port)) \
+               .withColumn("PROTOCOL", lit(proto)) \
+               .withColumn("L7_PROTO", lit(80.0 if dst_port in [80,443] else 0.0)) \
+               .withColumn("IN_BYTES", lit(pkt_len * 15)) \
+               .withColumn("IN_PKTS", lit(15)) \
+               .withColumn("OUT_BYTES", lit(pkt_len * 12)) \
+               .withColumn("OUT_PKTS", lit(12)) \
+               .withColumn("TCP_FLAGS", lit(tcp_flags)) \
+               .withColumn("CLIENT_TCP_FLAGS", lit(tcp_flags)) \
+               .withColumn("SERVER_TCP_FLAGS", lit(tcp_flags)) \
+               .withColumn("FLOW_DURATION_MILLISECONDS", lit(800)) \
+               .withColumn("DURATION_IN", lit(400)) \
+               .withColumn("DURATION_OUT", lit(400)) \
+               .withColumn("MIN_TTL", lit(ttl)) \
+               .withColumn("MAX_TTL", lit(ttl)) \
+               .withColumn("LONGEST_FLOW_PKT", lit(pkt_len)) \
+               .withColumn("SHORTEST_FLOW_PKT", lit(pkt_len)) \
+               .withColumn("MIN_IP_PKT_LEN", lit(pkt_len)) \
+               .withColumn("MAX_IP_PKT_LEN", lit(pkt_len)) \
+               .withColumn("SRC_TO_DST_SECOND_BYTES", lit(pkt_len * 20.0)) \
+               .withColumn("DST_TO_SRC_SECOND_BYTES", lit(pkt_len * 15.0)) \
+               .withColumn("RETRANSMITTED_IN_BYTES", lit(0)) \
+               .withColumn("RETRANSMITTED_IN_PKTS", lit(0)) \
+               .withColumn("RETRANSMITTED_OUT_BYTES", lit(0)) \
+               .withColumn("RETRANSMITTED_OUT_PKTS", lit(0)) \
+               .withColumn("SRC_TO_DST_AVG_THROUGHPUT", lit(5000000.0)) \
+               .withColumn("DST_TO_SRC_AVG_THROUGHPUT", lit(4000000.0)) \
+               .withColumn("NUM_PKTS_UP_TO_128_BYTES", lit(10 if pkt_len <= 128 else 0)) \
+               .withColumn("NUM_PKTS_128_TO_256_BYTES", lit(3 if 128 < pkt_len <= 256 else 0)) \
+               .withColumn("NUM_PKTS_256_TO_512_BYTES", lit(1 if 256 < pkt_len <= 512 else 0)) \
+               .withColumn("NUM_PKTS_512_TO_1024_BYTES", lit(1 if 512 < pkt_len <= 1024 else 0)) \
+               .withColumn("NUM_PKTS_1024_TO_1514_BYTES", lit(1 if pkt_len > 1024 else 0)) \
+               .withColumn("TCP_WIN_MAX_IN", lit(65535)) \
+               .withColumn("TCP_WIN_MAX_OUT", lit(65535)) \
+               .withColumn("ICMP_TYPE", lit(8 if proto == 1 else 0)) \
+               .withColumn("ICMP_IPV4_TYPE", lit(8 if proto == 1 else 0)) \
+               .withColumn("DNS_QUERY_ID", lit(0)) \
+               .withColumn("DNS_QUERY_TYPE", lit(0)) \
+               .withColumn("DNS_TTL_ANSWER", lit(0)) \
+               .withColumn("FTP_COMMAND_RET_CODE", lit(0.0))
+
+        # التنبؤ بالنموذج
         vec = assembler.transform(df)
         result = model.transform(vec).select("prediction", "probability").collect()[0]
+        
         label = "ATTACK" if result.prediction == 1 else "BENIGN"
         prob = float(result.probability[1]) * 100
 
-        # إصلاح عملية حفظ البيانات
+        # تخزين النتيجة
         record = {
             "src_ip": src_ip,
             "dst_ip": dst_ip,
@@ -122,33 +184,38 @@ def predict_packet(pkt):
             "dst_port": dst_port,
             "protocol": proto,
             "is_anomaly": int(result.prediction),
-            "anomaly_score": prob,  # استخدام prob بدلاً من score
-            "ingestion_time": datetime.now()
+            "anomaly_score": prob
         }
         
-        batch.append(record)
+        results_cache.append(record)
 
-        if len(batch) >= 10:
-            spark.createDataFrame(batch).write \
-                .format("org.apache.spark.sql.cassandra") \
-                .option("table", "predictions") \
-                .option("keyspace", "netflow") \
-                .mode("append").save()
-            print(f"Saved {len(batch)} records to Cassandra")
-            batch.clear()  # استخدام clear بدلاً من تعيين قائمة فارغة
-
-        print("\n" + "="*90)
+        # عرض النتيجة
+        print("\n" + "="*80)
         print(f" REAL-TIME DETECTION | {src_ip}:{src_port} → {dst_ip}:{dst_port} (Proto: {proto})")
         print(f" PREDICTION → {label} | Attack Probability: {prob:.2f}%")
         if label == "ATTACK":
-            print(" MALICIOUS TRAFFIC DETECTED! BLOCK THIS FLOW NOW!")
-        print("="*90)
+            print(" ⚠️  MALICIOUS TRAFFIC DETECTED! BLOCK THIS FLOW NOW!")
+        print("="*80)
+
+        # حفظ إلى Cassandra كل 5 نتائج
+        if len(results_cache) >= 5:
+            save_to_cassandra()
+
     except Exception as e:
-        print(f"Prediction error: {e}")
+        print(f"❌ Prediction error: {str(e)[:100]}")
 
-# بدء التقاط الباكتات
-print("Starting real-time detection (every packet triggers prediction)...")
-print("Try: curl google.com   OR   hping3 --flood ...   inside/outside the container")
-sniff(prn=predict_packet, store=False, iface="eth0")
+# بدء المراقبة
+print("🚀 Starting real-time detection (every packet triggers prediction)...")
+print("📡 Try: curl google.com OR hping3 --flood inside/outside the container")
+print("💾 Results will be saved to Cassandra every 5 packets")
 
-spark.stop()
+try:
+    sniff(prn=predict_packet, store=False, iface="eth0")
+except KeyboardInterrupt:
+    print("\n🛑 Stopping real-time detection...")
+    # حفظ أي نتائج متبقية
+    if results_cache:
+        save_to_cassandra()
+finally:
+    spark.stop()
+    print("✅ Spark session closed.")
