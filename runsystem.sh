@@ -4,12 +4,13 @@
 docker-compose up -d
 
 # Wait for Cassandra to be ready
-echo "Waiting for Cassandra to start..."
-until docker exec -i cassandra cqlsh -e "DESCRIBE KEYSPACES;" &> /dev/null; do
+echo "Waiting for Cassandra CQL port..."
+while ! docker exec cassandra cqlsh -e "DESCRIBE KEYSPACES;" &> /dev/null; do
     echo -n "."
     sleep 5
 done
 echo "Cassandra is ready!"
+
 
 docker exec -it cassandra cqlsh cassandra 9042 -e "DESC KEYSPACES;" && docker exec -it cassandra cqlsh cassandra 9042 -f /init.cql && chmod -R 777 ./model && docker exec -it bigdata_project_spark-master_1 sh -c "pip install scapy --break-system-packages" && docker exec -it bigdata_project_spark-master_1 sh -c "cd /scripts && python3 realtime_netflow_predictor_savedb.py"
 
