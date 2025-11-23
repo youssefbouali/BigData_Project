@@ -1,6 +1,6 @@
 # /scripts/realtime_capture_kafka.py
-# خفيف 100% – بدون أي PySpark أو Spark أو cloudpickle
-# يرسل كل باكت لـ Kafka topic اسمه: packets_raw
+# يلتقط الباكتات من الشبكة ويرسلها لـ Kafka
+# يتجاهل تمامًا باكتات Kafka نفسها (port 9092) عشان ما يعملش loop لا نهائي
 
 from scapy.all import sniff, IP, TCP, UDP
 from kafka import KafkaProducer
@@ -23,7 +23,7 @@ producer = KafkaProducer(
     acks='all',
     retries=3,
     batch_size=16384,
-    linger_ms=10
+    linger_ms=5
 )
 
 topic = "packets_raw"
@@ -31,11 +31,20 @@ topic = "packets_raw"
 def handle_packet(pkt):
     if not pkt.haslayer(IP):
         return
-    
+
+    ip = pkt[IP]
+    src_ip = ip.src
+    dst_ip = ip.dst
+
+    # تجاهل كل باكتات Kafka (من وإلى port 9092)
+    if pkt.haslayer(TCP):
+        if pkt[TCP].sport == 9092 or pkt[TCP].dport == 9092:
+            return
+    if pkt.haslayer(UDP):
+        if pkt[UDP].sport == 9092 or pkt[UDP].dport == 9092:
+            return
+
     try:
-        ip = pkt[IP]
-        src_ip = ip.src
-        dst_ip = ip.dst
         proto = ip.proto
         pkt_len = len(pkt)
         ttl = ip.ttl
@@ -63,15 +72,16 @@ def handle_packet(pkt):
             "timestamp": time.time()
         }
 
-        # إرسال فوري لـ Kafka
         producer.send(topic, value=packet_data)
         
-        # طباعة خفيفة (اختياري)
+        # طباعة خفيفة (فقط الباكتات الحقيقية)
         print(f"→ {src_ip}:{src_port} → {dst_ip}:{dst_port} (Len: {pkt_len})")
 
     except Exception as e:
-        pass  # تجاهل أي باكت مش مفهوم
+        pass  # تجاهل أي خطأ
 
 print("Real-time Packet Capture → Kafka STARTED")
-print("Topic: packets_raw | Interface: eth0")
+print("Kafka traffic (port 9092) is IGNORED to prevent loop")
+print("Listening on eth0...")
+
 sniff(prn=handle_packet, store=False, iface="eth0")
