@@ -27,7 +27,7 @@ spark = SparkSession.builder \
     .getOrCreate()
 
 print("Model loading...")
-model = RandomForestClassificationModel.load("/model/oldanomaly_detection_model_rf.spark")
+model = RandomForestClassificationModel.load("/model/anomaly_detection_model_rf.spark")
 print("Model loaded! Starting batched real-time detection...")
 
 assembler = VectorAssembler(inputCols=[
