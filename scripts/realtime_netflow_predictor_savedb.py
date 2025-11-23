@@ -91,7 +91,6 @@ def csv_to_cassandra(name):
         .options(table="predictions", keyspace="netflow") \
         .mode("append") \
         .save()
-    os.remove("/data/predictions_"+name+".csv")
 
 
 
@@ -126,6 +125,7 @@ def save_to_cassandra():
         csv_to_cassandra(random_name)
         print(f"✓ Saved {len(results_cache)} records to CSV")
         results_cache.clear()
+        os.remove("/data/predictions_"+name+".csv")
     except Exception as e:
         print(f"✗ Failed to save to CSV: {e}")
 
