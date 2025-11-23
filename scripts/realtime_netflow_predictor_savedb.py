@@ -52,26 +52,15 @@ import csv
 import os
 
 def save_to_cassandra():
-    """حفظ النتائج إلى Cassandra بشكل منفصل - الخيار 1"""
+    """حفظ النتائج إلى Cassandra باستخدام parallelize لتجنب مشاكل التسلسل"""
     if not results_cache:
         return
     
     try:
-        # إنشاء DataFrame من النتائج المتراكمة
-        data = []
-        for record in results_cache:
-            data.append((
-                record["src_ip"],        # src_ip (TEXT)
-                record["dst_ip"],        # dst_ip (TEXT)  
-                record["src_port"],      # src_port (INT)
-                record["dst_port"],      # dst_port (INT)
-                record["protocol"],      # protocol (INT)
-                record["is_anomaly"],    # is_anomaly (INT)
-                record["anomaly_score"], # anomaly_score (DOUBLE)
-                datetime.now()           # ingestion_time (TIMESTAMP)
-            ))
+        # تحويل البيانات إلى RDD مباشرة لتجنب مشاكل cloudpickle
+        data_rdd = spark.sparkContext.parallelize(results_cache)
         
-        # إنشاء DataFrame مع مخطط متوافق مع جدول Cassandra الجديد
+        # تحويل RDD إلى DataFrame باستخدام createDataFrame المباشر
         from pyspark.sql.types import StructType, StructField, StringType, IntegerType, DoubleType, TimestampType
         
         schema = StructType([
@@ -85,7 +74,22 @@ def save_to_cassandra():
             StructField("ingestion_time", TimestampType(), True)
         ])
         
-        df = spark.createDataFrame(data, schema)
+        # تحويل البيانات مباشرة إلى قائمة tuples
+        data_tuples = []
+        for record in results_cache:
+            data_tuples.append((
+                record["src_ip"],
+                record["dst_ip"], 
+                record["src_port"],
+                record["dst_port"],
+                record["protocol"],
+                record["is_anomaly"],
+                record["anomaly_score"],
+                datetime.now()
+            ))
+        
+        # إنشاء DataFrame مباشرة من القائمة
+        df = spark.createDataFrame(data_tuples, schema)
         
         # محاولة الحفظ إلى Cassandra
         df.write \
@@ -100,8 +104,8 @@ def save_to_cassandra():
         
     except Exception as e:
         print(f"✗ Failed to save to Cassandra: {str(e)[:200]}")
-        # في حالة الفشل، احفظ في CSV كنسخة احتياطية
-        save_to_csv_backup()
+        # استخدم النسخة الاحتياطية البسيطة
+        simple_csv_backup()
 
 def save_to_csv():
     """حفظ النتائج إلى ملف CSV مؤقتاً"""
