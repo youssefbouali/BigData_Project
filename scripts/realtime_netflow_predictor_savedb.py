@@ -19,8 +19,8 @@ spark = SparkSession.builder \
     .config("spark.cassandra.auth.username", "cassandra") \
     .config("spark.cassandra.auth.password", "cassandra") \
     .config("spark.cassandra.output.batch.size.rows", "1") \
+    .config("spark.cassandra.output.concurrent.writes", "1") \
     #.config("spark.cassandra.concurrent.writes", "1")
-    .config("spark.cassandra.output.concurrent.writes", "1")
     .getOrCreate()
 
 
