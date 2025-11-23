@@ -42,6 +42,7 @@ consumer = KafkaConsumer(
 print("PROCESSOR ONLY STARTED – Waiting for packets from Kafka...")
 
 batch = []
+rows = []
 
 for msg in consumer:
     pkt = msg.value
