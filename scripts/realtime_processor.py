@@ -8,54 +8,6 @@ from kafka import KafkaConsumer
 import json
 from datetime import datetime
 
-
-from pyspark.sql.types import *
-
-schema = StructType([
-    StructField("L4_SRC_PORT", DoubleType()),
-    StructField("L4_DST_PORT", DoubleType()),
-    StructField("PROTOCOL", DoubleType()),
-    StructField("L7_PROTO", DoubleType()),
-    StructField("IN_BYTES", DoubleType()),
-    StructField("IN_PKTS", DoubleType()),
-    StructField("OUT_BYTES", DoubleType()),
-    StructField("OUT_PKTS", DoubleType()),
-    StructField("TCP_FLAGS", DoubleType()),
-    StructField("CLIENT_TCP_FLAGS", DoubleType()),
-    StructField("SERVER_TCP_FLAGS", DoubleType()),
-    StructField("FLOW_DURATION_MILLISECONDS", DoubleType()),
-    StructField("DURATION_IN", DoubleType()),
-    StructField("DURATION_OUT", DoubleType()),
-    StructField("MIN_TTL", DoubleType()),
-    StructField("MAX_TTL", DoubleType()),
-    StructField("LONGEST_FLOW_PKT", DoubleType()),
-    StructField("SHORTEST_FLOW_PKT", DoubleType()),
-    StructField("MIN_IP_PKT_LEN", DoubleType()),
-    StructField("MAX_IP_PKT_LEN", DoubleType()),
-    StructField("SRC_TO_DST_SECOND_BYTES", DoubleType()),
-    StructField("DST_TO_SRC_SECOND_BYTES", DoubleType()),
-    StructField("RETRANSMITTED_IN_BYTES", DoubleType()),
-    StructField("RETRANSMITTED_IN_PKTS", DoubleType()),
-    StructField("RETRANSMITTED_OUT_BYTES", DoubleType()),
-    StructField("RETRANSMITTED_OUT_PKTS", DoubleType()),
-    StructField("SRC_TO_DST_AVG_THROUGHPUT", DoubleType()),
-    StructField("DST_TO_SRC_AVG_THROUGHPUT", DoubleType()),
-    StructField("NUM_PKTS_UP_TO_128_BYTES", DoubleType()),
-    StructField("NUM_PKTS_128_TO_256_BYTES", DoubleType()),
-    StructField("NUM_PKTS_256_TO_512_BYTES", DoubleType()),
-    StructField("NUM_PKTS_512_TO_1024_BYTES", DoubleType()),
-    StructField("NUM_PKTS_1024_TO_1514_BYTES", DoubleType()),
-    StructField("TCP_WIN_MAX_IN", DoubleType()),
-    StructField("TCP_WIN_MAX_OUT", DoubleType()),
-    StructField("ICMP_TYPE", DoubleType()),
-    StructField("ICMP_IPV4_TYPE", DoubleType()),
-    StructField("DNS_QUERY_ID", DoubleType()),
-    StructField("DNS_QUERY_TYPE", DoubleType()),
-    StructField("DNS_TTL_ANSWER", DoubleType()),
-    StructField("FTP_COMMAND_RET_CODE", DoubleType())
-])
-
-
 spark = SparkSession.builder \
     .appName("IDS Processor Only") \
     .master("local[*]") \
@@ -133,22 +85,27 @@ for msg in consumer:
     }
 
     # أهم حاجة: نعمل DataFrame خارج أي loop أو function
-    #df = spark.createDataFrame([row])
-    df = spark.createDataFrame([row], schema=schema)
+    df = spark.createDataFrame([row])
+    
+    rows.append(row)
+    if len(rows) == 2:
+        df = spark.createDataFrame(rows, schema=schema)
 
-    pred = model.transform(assembler.transform(df)).collect()[0]
-    score = float(pred.probability[1])
-    label = "ATTACK" if pred.prediction == 1 else "BENIGN"
+    
+        pred = model.transform(assembler.transform(df)).collect()[0]
+        score = float(pred.probability[1])
+        label = "ATTACK" if pred.prediction == 1 else "BENIGN"
 
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] {pkt['src_ip']}:{pkt['src_port']} → {pkt['dst_ip']}:{pkt['dst_port']} | {label} ({score:.4f})")
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] {pkt['src_ip']}:{pkt['src_port']} → {pkt['dst_ip']}:{pkt['dst_port']} | {label} ({score:.4f})")
 
-    batch.append({**pkt, "is_anomaly": int(pred.prediction), "anomaly_score": score, "ingestion_time": datetime.now()})
+        batch.append({**pkt, "is_anomaly": int(pred.prediction), "anomaly_score": score, "ingestion_time": datetime.now()})
 
-    if len(batch) >= 10:
-        spark.createDataFrame(batch).write \
-            .format("org.apache.spark.sql.cassandra") \
-            .option("table", "predictions") \
-            .option("keyspace", "netflow") \
-            .mode("append").save()
-        print(f"Saved {len(batch)} records to Cassandra")
-        batch = []
+        if len(batch) >= 10:
+            spark.createDataFrame(batch).write \
+                .format("org.apache.spark.sql.cassandra") \
+                .option("table", "predictions") \
+                .option("keyspace", "netflow") \
+                .mode("append").save()
+            print(f"Saved {len(batch)} records to Cassandra")
+            batch = []
+        rows = []
