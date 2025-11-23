@@ -47,56 +47,40 @@ assembler = VectorAssembler(inputCols=input_cols, outputCol="features")
 # تخزين محلي للنتائج بدلاً من Cassandra مؤقتاً
 results_cache = []
 
-def save_to_cassandra():
-    """حفظ النتائج إلى Cassandra بشكل منفصل"""
+# إضافة هذا في بداية الملف بعد التهيئات
+import csv
+import os
+
+def save_to_csv():
+    """حفظ النتائج إلى ملف CSV مؤقتاً"""
     if not results_cache:
         return
     
     try:
-        # إنشاء DataFrame من النتائج المتراكمة
-        data = []
-        for record in results_cache:
-            data.append((
-                record["src_ip"],
-                record["dst_ip"],
-                record["src_port"],
-                record["dst_port"],
-                record["protocol"],
-                record["is_anomaly"],
-                record["anomaly_score"],
-                datetime.now()
-            ))
+        file_exists = os.path.isfile('/tmp/predictions.csv')
+        with open('/tmp/predictions.csv', 'a', newline='') as f:
+            writer = csv.writer(f)
+            if not file_exists:
+                writer.writerow(['src_ip', 'dst_ip', 'src_port', 'dst_port', 'protocol', 'is_anomaly', 'anomaly_score', 'timestamp'])
+            
+            for record in results_cache:
+                writer.writerow([
+                    record["src_ip"],
+                    record["dst_ip"],
+                    record["src_port"],
+                    record["dst_port"],
+                    record["protocol"],
+                    record["is_anomaly"],
+                    record["anomaly_score"],
+                    datetime.now().isoformat()
+                ])
         
-        # إنشاء DataFrame مع مخطط محدد
-        from pyspark.sql.types import StructType, StructField, StringType, IntegerType, DoubleType, TimestampType
-        
-        schema = StructType([
-            StructField("src_ip", StringType(), True),
-            StructField("dst_ip", StringType(), True),
-            StructField("src_port", IntegerType(), True),
-            StructField("dst_port", IntegerType(), True),
-            StructField("protocol", IntegerType(), True),
-            StructField("is_anomaly", IntegerType(), True),
-            StructField("anomaly_score", DoubleType(), True),
-            StructField("ingestion_time", TimestampType(), True)
-        ])
-        
-        df = spark.createDataFrame(data, schema)
-        
-        # محاولة الحفظ إلى Cassandra
-        df.write \
-            .format("org.apache.spark.sql.cassandra") \
-            .option("table", "predictions") \
-            .option("keyspace", "netflow") \
-            .mode("append") \
-            .save()
-        
-        print(f"✓ Saved {len(results_cache)} records to Cassandra")
+        print(f"✓ Saved {len(results_cache)} records to CSV")
         results_cache.clear()
-        
     except Exception as e:
-        print(f"✗ Failed to save to Cassandra: {e}")
-        # استمر في العمل حتى لو فشل الحفظ
+        print(f"✗ Failed to save to CSV: {e}")
+
+# ثم استبدل save_to_cassandra() بـ save_to_csv() في الكود
 
 def predict_packet(pkt):
     """معالجة حزمة شبكة واحدة"""
@@ -199,7 +183,7 @@ def predict_packet(pkt):
 
         # حفظ إلى Cassandra كل 5 نتائج
         if len(results_cache) >= 5:
-            save_to_cassandra()
+            save_to_csv()
 
     except Exception as e:
         print(f"❌ Prediction error: {str(e)[:100]}")
@@ -215,7 +199,7 @@ except KeyboardInterrupt:
     print("\n🛑 Stopping real-time detection...")
     # حفظ أي نتائج متبقية
     if results_cache:
-        save_to_cassandra()
+        save_to_csv()
 finally:
     spark.stop()
     print("✅ Spark session closed.")
