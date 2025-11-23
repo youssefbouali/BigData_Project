@@ -3,14 +3,14 @@
 # Start containers
 docker-compose up -d
 
-# Wait for Cassandra to be ready
 echo "Waiting for Cassandra CQL port..."
 MAX_WAIT=360
 WAITED=0
+
 until docker exec cassandra cqlsh -e "DESCRIBE KEYSPACES;" &> /dev/null; do
-    echo -n "."
     sleep 5
     WAITED=$((WAITED+5))
+    echo -n "."
     if [ $WAITED -ge $MAX_WAIT ]; then
         echo "Cassandra CQL did not become ready in time"
         exit 1
@@ -20,8 +20,15 @@ echo "Cassandra is ready!"
 
 
 
-docker exec -it cassandra cqlsh cassandra 9042 -e "DESC KEYSPACES;" && docker exec -it cassandra cqlsh cassandra 9042 -f /init.cql && chmod -R 777 ./model && docker exec -it bigdata_project_spark-master_1 sh -c "pip install scapy --break-system-packages" && docker exec -it bigdata_project_spark-master_1 sh -c "cd /scripts && python3 realtime_netflow_predictor_savedb.py"
+docker exec -i cassandra cqlsh cassandra 9042 -e "DESC KEYSPACES;"
 
+docker exec -i cassandra cqlsh cassandra 9042 -f /init.cql || { echo "Cassandra init failed"; exit 1; }
+
+chmod -R 777 ./model || { echo "Failed to set model permissions"; exit 1; }
+
+
+docker exec bigdata_project_spark-master_1 sh -c "pip install scapy --break-system-packages" || { echo "pip install failed"; exit 1; }
+docker exec bigdata_project_spark-master_1 sh -c "cd /scripts && python3 realtime_netflow_predictor_savedb.py" || { echo "Python script failed"; exit 1; }
 #docker exec -it cassandra cqlsh cassandra 9042 -e "SELECT COUNT(*) FROM netflow.flows;" && docker exec -it bigdata_project_spark-master_1 spark-submit --master spark://spark-master:7077 --packages com.datastax.spark:spark-cassandra-connector_2.12:3.4.1 --conf spark.cassandra.connection.host=cassandra --conf spark.cassandra.auth.username=cassandra --conf spark.cassandra.auth.password=cassandra /scripts/clean_and_load.py
 
 
