@@ -5,7 +5,7 @@ docker-compose up -d
 
 # Wait for Cassandra to be ready
 echo "Waiting for Cassandra to start..."
-until docker exec -it cassandra cqlsh -e "DESCRIBE KEYSPACES;" &> /dev/null; do
+until docker exec -i cassandra cqlsh -e "DESCRIBE KEYSPACES;" &> /dev/null; do
     echo -n "."
     sleep 5
 done
