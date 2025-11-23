@@ -73,48 +73,48 @@ services:
     networks:
       - default
 
-  zookeeper:
-    image: confluentinc/cp-zookeeper:6.2.1
-    environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
-    ports:
-      - "2181:2181"
-    networks:
-      - default
+#  zookeeper:
+#    image: confluentinc/cp-zookeeper:6.2.1
+#    environment:
+#      ZOOKEEPER_CLIENT_PORT: 2181
+#    ports:
+#      - "2181:2181"
+#    networks:
+#      - default
+#
+#  kafka:
+#    image: confluentinc/cp-kafka:6.2.1
+#    depends_on:
+#      - zookeeper
+#    ports:
+#      - "9092:9092"
+#    environment:
+#      KAFKA_BROKER_ID: 1
+#      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+#      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+#      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+#    networks:
+#      - default
 
-  kafka:
-    image: confluentinc/cp-kafka:6.2.1
-    depends_on:
-      - zookeeper
-    ports:
-      - "9092:9092"
-    environment:
-      KAFKA_BROKER_ID: 1
-      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-    networks:
-      - default
 
 
-
-  capture:
-    build:
-      context: ./docker/capture
-    privileged: true
-    #network_mode: host
-    volumes:
-      - ./data/pcap:/pcap
-      - ./data/flows:/flows
-      - ./data/csv:/csv
-    depends_on:
-      - kafka
-    environment:
-      - INTERFACE=enp0s25
-      - KAFKA_BROKERS=kafka:9092
-      - TOPIC=netflow-data
-    networks:
-      - default
+#  capture:
+#    build:
+#      context: ./docker/capture
+#    privileged: true
+#    #network_mode: host
+#    volumes:
+#      - ./data/pcap:/pcap
+#      - ./data/flows:/flows
+#      - ./data/csv:/csv
+#    depends_on:
+#      - kafka
+#    environment:
+#      - INTERFACE=enp0s25
+#      - KAFKA_BROKERS=kafka:9092
+#      - TOPIC=netflow-data
+#    networks:
+#      - default
 
 volumes:
   cassandra-data:
