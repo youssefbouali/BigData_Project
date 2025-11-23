@@ -12,7 +12,7 @@ from datetime import datetime
 spark = SparkSession.builder \
     .appName("RealTime IDS - Final Version") \
     .master("local[*]") \
-    .config("spark.driver.memory", "6g") \
+    .config("spark.driver.memory", "4g") \
     .config("spark.cassandra.connection.host", "cassandra") \
     .config("spark.cassandra.auth.username", "cassandra") \
     .config("spark.cassandra.auth.password", "cassandra") \
@@ -36,9 +36,9 @@ assembler = VectorAssembler(inputCols=[
 consumer = KafkaConsumer(
     'packets_raw',
     bootstrap_servers=['kafka:9092'],
-    auto_offset_reset='latest',
+    auto_offset_reset='earliest',      # ← ده اللي كان ناقص
     enable_auto_commit=True,
-    group_id='ids-final',
+    group_id='ids-group',              # ← خليها ثابتة دايمًا
     value_deserializer=lambda x: json.loads(x.decode('utf-8'))
 )
 
