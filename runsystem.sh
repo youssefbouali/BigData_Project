@@ -7,7 +7,7 @@ echo "Waiting for Cassandra CQL port..."
 MAX_WAIT=360
 WAITED=0
 
-until docker exec cassandra cqlsh -e "DESCRIBE KEYSPACES;" &> /dev/null; do
+until docker exec cassandra cqlsh cassandra 9042 -e "DESCRIBE KEYSPACES;" &> /dev/null; do
     sleep 5
     WAITED=$((WAITED+5))
     echo -n "."
