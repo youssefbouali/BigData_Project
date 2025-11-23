@@ -65,7 +65,7 @@ services:
     depends_on:
       - spark-master
       - cassandra
-      - kafka
+#      - kafka
     volumes:
       - ./scripts:/scripts
       - ./data:/data
