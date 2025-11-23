@@ -52,47 +52,37 @@ import csv
 import os
 
 def save_to_cassandra():
-    """حفظ النتائج إلى Cassandra بشكل منفصل"""
+    """حفظ النتائج إلى Cassandra بشكل منفصل - الخيار 1"""
     if not results_cache:
         return
     
     try:
-        # إنشاء بيانات متوافقة مع جدول Cassandra
+        # إنشاء DataFrame من النتائج المتراكمة
         data = []
         for record in results_cache:
-            # تحويل IP إلى integer (طريقة بسيطة)
-            src_ip_int = sum(int(x) * (256 ** i) for i, x in enumerate(reversed(record["src_ip"].split('.'))))
-            dst_ip_int = sum(int(x) * (256 ** i) for i, x in enumerate(reversed(record["dst_ip"].split('.'))))
-            
             data.append((
-                src_ip_int,
-                datetime.now(),
-                dst_ip_int,
-                record["src_port"],
-                record["dst_port"],
-                record["protocol"],
-                0,  # in_bytes (قيمة افتراضية)
-                0,  # out_bytes (قيمة افتراضية) 
-                0,  # duration_ms (قيمة افتراضية)
-                record["is_anomaly"],
-                record["anomaly_score"]
+                record["src_ip"],        # src_ip (TEXT)
+                record["dst_ip"],        # dst_ip (TEXT)  
+                record["src_port"],      # src_port (INT)
+                record["dst_port"],      # dst_port (INT)
+                record["protocol"],      # protocol (INT)
+                record["is_anomaly"],    # is_anomaly (INT)
+                record["anomaly_score"], # anomaly_score (DOUBLE)
+                datetime.now()           # ingestion_time (TIMESTAMP)
             ))
         
-        # إنشاء schema متوافق
-        from pyspark.sql.types import StructType, StructField, IntegerType, DoubleType, TimestampType
+        # إنشاء DataFrame مع مخطط متوافق مع جدول Cassandra الجديد
+        from pyspark.sql.types import StructType, StructField, StringType, IntegerType, DoubleType, TimestampType
         
         schema = StructType([
-            StructField("src_ip_int", IntegerType(), True),
-            StructField("ingestion_time", TimestampType(), True),
-            StructField("dst_ip_int", IntegerType(), True),
+            StructField("src_ip", StringType(), True),
+            StructField("dst_ip", StringType(), True),
             StructField("src_port", IntegerType(), True),
             StructField("dst_port", IntegerType(), True),
             StructField("protocol", IntegerType(), True),
-            StructField("in_bytes", IntegerType(), True),
-            StructField("out_bytes", IntegerType(), True),
-            StructField("duration_ms", IntegerType(), True),
             StructField("is_anomaly", IntegerType(), True),
-            StructField("anomaly_score", DoubleType(), True)
+            StructField("anomaly_score", DoubleType(), True),
+            StructField("ingestion_time", TimestampType(), True)
         ])
         
         df = spark.createDataFrame(data, schema)
@@ -110,6 +100,8 @@ def save_to_cassandra():
         
     except Exception as e:
         print(f"✗ Failed to save to Cassandra: {str(e)[:200]}")
+        # في حالة الفشل، احفظ في CSV كنسخة احتياطية
+        save_to_csv_backup()
 
 def save_to_csv():
     """حفظ النتائج إلى ملف CSV مؤقتاً"""

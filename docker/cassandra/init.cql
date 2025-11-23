@@ -59,21 +59,22 @@ AND compaction = {
 
 
 
-CREATE TABLE IF NOT EXISTS netflow.predictions (
-    src_ip_int INT,
-    ingestion_time TIMESTAMP,
-    dst_ip_int INT,
-    src_port INT,
-    dst_port INT,
-    protocol INT,
-    in_bytes BIGINT,
-    out_bytes BIGINT,
-    duration_ms BIGINT,
-    is_anomaly INT,
-    anomaly_score DOUBLE,
-    PRIMARY KEY (src_ip_int, ingestion_time)
-) WITH CLUSTERING ORDER BY (ingestion_time DESC);
 
 -- Index pour accélérer les requêtes par type d'attaque
 CREATE INDEX IF NOT EXISTS idx_label ON netflow.flows (label);
 CREATE INDEX IF NOT EXISTS idx_attack_type ON netflow.flows (attack_type);
+
+
+DROP TABLE IF EXISTS netflow.predictions;
+
+CREATE TABLE IF NOT EXISTS netflow.predictions (
+    src_ip TEXT,
+    dst_ip TEXT,
+    src_port INT,
+    dst_port INT,
+    protocol INT,
+    is_anomaly INT,
+    anomaly_score DOUBLE,
+    ingestion_time TIMESTAMP,
+    PRIMARY KEY ((src_ip), ingestion_time, dst_ip)
+) WITH CLUSTERING ORDER BY (ingestion_time DESC, dst_ip ASC);
