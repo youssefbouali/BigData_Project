@@ -85,7 +85,7 @@ for msg in consumer:
     }
 
     # أهم حاجة: نعمل DataFrame خارج أي loop أو function
-    df = spark.createDataFrame([row])
+    #df = spark.createDataFrame([row])
     
     rows.append(row)
     if len(rows) == 2:
