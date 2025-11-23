@@ -46,7 +46,7 @@ def handle(pkt):
             "pkt_len": len(pkt),
             "tcp_flags": tcp_flags,
             "ttl": ip.ttl,
-            3"timestamp": time.time()
+            "timestamp": time.time()
         }
         producer.send(topic, value=data)
     except: pass
