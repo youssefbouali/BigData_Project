@@ -52,44 +52,50 @@ import csv
 import os
 
 def save_to_cassandra():
-    """حفظ النتائج إلى Cassandra باستخدام parallelize لتجنب مشاكل التسلسل"""
+    """حفظ النتائج إلى Cassandra بشكل منفصل"""
     if not results_cache:
         return
     
     try:
-        # تحويل البيانات إلى RDD مباشرة لتجنب مشاكل cloudpickle
-        data_rdd = spark.sparkContext.parallelize(results_cache)
-        
-        # تحويل RDD إلى DataFrame باستخدام createDataFrame المباشر
-        from pyspark.sql.types import StructType, StructField, StringType, IntegerType, DoubleType, TimestampType
-        
-        schema = StructType([
-            StructField("src_ip", StringType(), True),
-            StructField("dst_ip", StringType(), True),
-            StructField("src_port", IntegerType(), True),
-            StructField("dst_port", IntegerType(), True),
-            StructField("protocol", IntegerType(), True),
-            StructField("is_anomaly", IntegerType(), True),
-            StructField("anomaly_score", DoubleType(), True),
-            StructField("ingestion_time", TimestampType(), True)
-        ])
-        
-        # تحويل البيانات مباشرة إلى قائمة tuples
-        data_tuples = []
+        # إنشاء بيانات متوافقة مع جدول Cassandra
+        data = []
         for record in results_cache:
-            data_tuples.append((
-                record["src_ip"],
-                record["dst_ip"], 
+            # تحويل IP إلى integer (طريقة بسيطة)
+            src_ip_int = sum(int(x) * (256 ** i) for i, x in enumerate(reversed(record["src_ip"].split('.'))))
+            dst_ip_int = sum(int(x) * (256 ** i) for i, x in enumerate(reversed(record["dst_ip"].split('.'))))
+            
+            data.append((
+                src_ip_int,
+                datetime.now(),
+                dst_ip_int,
                 record["src_port"],
                 record["dst_port"],
                 record["protocol"],
+                0,  # in_bytes (قيمة افتراضية)
+                0,  # out_bytes (قيمة افتراضية) 
+                0,  # duration_ms (قيمة افتراضية)
                 record["is_anomaly"],
-                record["anomaly_score"],
-                datetime.now()
+                record["anomaly_score"]
             ))
         
-        # إنشاء DataFrame مباشرة من القائمة
-        df = spark.createDataFrame(data_tuples, schema)
+        # إنشاء schema متوافق
+        from pyspark.sql.types import StructType, StructField, IntegerType, DoubleType, TimestampType
+        
+        schema = StructType([
+            StructField("src_ip_int", IntegerType(), True),
+            StructField("ingestion_time", TimestampType(), True),
+            StructField("dst_ip_int", IntegerType(), True),
+            StructField("src_port", IntegerType(), True),
+            StructField("dst_port", IntegerType(), True),
+            StructField("protocol", IntegerType(), True),
+            StructField("in_bytes", IntegerType(), True),
+            StructField("out_bytes", IntegerType(), True),
+            StructField("duration_ms", IntegerType(), True),
+            StructField("is_anomaly", IntegerType(), True),
+            StructField("anomaly_score", DoubleType(), True)
+        ])
+        
+        df = spark.createDataFrame(data, schema)
         
         # محاولة الحفظ إلى Cassandra
         df.write \
@@ -104,8 +110,6 @@ def save_to_cassandra():
         
     except Exception as e:
         print(f"✗ Failed to save to Cassandra: {str(e)[:200]}")
-        # استخدم النسخة الاحتياطية البسيطة
-        simple_csv_backup()
 
 def save_to_csv():
     """حفظ النتائج إلى ملف CSV مؤقتاً"""
@@ -239,7 +243,7 @@ def predict_packet(pkt):
 
         # حفظ إلى Cassandra كل 5 نتائج
         if len(results_cache) >= 5:
-            save_to_cassandra()
+            save_to_csv()
 
     except Exception as e:
         print(f"❌ Prediction error: {str(e)[:100]}")
@@ -255,7 +259,7 @@ except KeyboardInterrupt:
     print("\n🛑 Stopping real-time detection...")
     # حفظ أي نتائج متبقية
     if results_cache:
-        save_to_cassandra()
+        save_to_csv()
 finally:
     spark.stop()
     print("✅ Spark session closed.")
