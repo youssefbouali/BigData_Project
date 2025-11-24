@@ -138,6 +138,39 @@ def save_to_cassandra():
 
 
 def save_to_csv():
+    """حفظ النتائج إلى ملف CSV مؤقتاً"""
+    if not results_cache:
+        return
+    
+    try:
+        file_exists = os.path.isfile('/data/predictions.csv')
+        with open('/data/predictions.csv', 'a', newline='') as f:
+            writer = csv.writer(f)
+            if not file_exists:
+                writer.writerow(['src_ip', 'dst_ip', 'src_port', 'dst_port', 'protocol', 'is_anomaly', 'anomaly_score', 'timestamp'])
+            
+            for record in results_cache:
+                writer.writerow([
+                    record["src_ip"],
+                    record["dst_ip"],
+                    record["src_port"],
+                    record["dst_port"],
+                    record["protocol"],
+                    record["is_anomaly"],
+                    record["anomaly_score"],
+                    datetime.now().isoformat()
+                ])
+        #csv_to_cassandra(name)
+        print(f"✓ Saved {len(results_cache)} records to CSV")
+        results_cache.clear()
+    except Exception as e:
+        print(f"✗ Failed to save to CSV: {e}")
+        
+        
+        
+        
+"""
+def save_to_csv():
     CSV_PATH = "/data/predictions.csv"
 
     df = spark.read.option("header", "true") \
@@ -167,7 +200,7 @@ def save_to_csv():
         .mode("append") \
         .save()
 
-
+"""
 
 
 
