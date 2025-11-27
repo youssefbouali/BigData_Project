@@ -116,5 +116,63 @@ services:
 #    networks:
 #      - default
 
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.2
+    container_name: elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms2g -Xmx2g"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - es-data:/usr/share/elasticsearch/data
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    networks:
+      - default
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.15.2
+    container_name: kibana
+    ports:
+      - "5601:5601"
+    environment:
+      ELASTICSEARCH_HOSTS: http://elasticsearch:9200
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    networks:
+      - default
+
+  # هذا الكونتينر هو الجسر السحري بين Cassandra و Elasticsearch
+  cassandra-elastic-connector:
+    image: strumel/cassandra-elastic-connector:latest
+    container_name: cassandra-to-elastic
+    environment:
+      - CASSANDRA_HOST=cassandra
+      - CASSANDRA_PORT=9042
+      - ELASTICSEARCH_HOST=elasticsearch
+      - ELASTICSEARCH_PORT=9200
+      - KEYSPACES=netflow
+      - TABLES=flows,predictions
+      - POLL_INTERVAL=10
+      - BATCH_SIZE=1000
+    depends_on:
+      - cassandra
+      - elasticsearch
+    networks:
+      - default
+
 volumes:
   cassandra-data:
+  es-data:
