@@ -67,8 +67,8 @@ CREATE INDEX IF NOT EXISTS idx_attack_type ON netflow.flows (attack_type);
 
 -- DROP TABLE IF EXISTS netflow.predictions;
 
-CREATE TABLE IF NOT EXISTS netflow.predictions (
-    prediction_id UUID DEFAULT uuid(),   
+CREATE TABLE netflow.predictions (
+    prediction_id UUID, 
     src_ip TEXT,
     dst_ip TEXT,
     src_port INT,
