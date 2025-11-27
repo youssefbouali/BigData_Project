@@ -127,10 +127,12 @@ services:
     environment:
       - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=bigdata2025
-      - GF_INSTALL_PLUGINS=grafana-cassandra-datasource
+      # تثبيت الـ plugin الرسمي (HadesArchitect) عبر grafana-cli (يعمل 100%)
+      - GF_INSTALL_PLUGINS=hadesarchitect-cassandra-datasource
+      # السماح بـ unsigned plugins (مطلوب للـ beta)
+      - GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=hadesarchitect-cassandra-datasource
     volumes:
       - grafana-data:/var/lib/grafana
-      - ./docker/grafana/provisioning:/etc/grafana/provisioning
     depends_on:
       - cassandra
     networks:
