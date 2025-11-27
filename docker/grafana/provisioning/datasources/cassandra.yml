@@ -1,0 +1,23 @@
+apiVersion: 1
+
+datasources:
+  - name: Cassandra
+    type: grafana-cassandra-datasource
+    access: proxy
+    orgId: 1
+    version: 1
+    editable: true
+    jsonData:
+      keyspace: netflow
+      consistency: ONE
+      contactPoints: cassandra        # اسم الخدمة في docker-compose
+      port: 9042
+      protocolVersion: 4
+      timeout: 10
+      ssl: false
+      auth: true
+      user: cassandra
+      password: cassandra
+    secureJsonData:
+      password: cassandra
+    isDefault: true
