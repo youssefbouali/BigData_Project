@@ -78,18 +78,3 @@ CREATE TABLE IF NOT EXISTS netflow.predictions (
     ingestion_time TIMESTAMP,
     PRIMARY KEY ((src_ip), ingestion_time, dst_ip)
 ) WITH CLUSTERING ORDER BY (ingestion_time DESC, dst_ip ASC);
-
-
-
-CREATE MATERIALIZED VIEW IF NOT EXISTS netflow.predictions_by_anomaly AS
-SELECT 
-    is_anomaly,
-    ingestion_time,
-    src_ip,
-    dst_ip
-FROM netflow.predictions
-WHERE src_ip IS NOT NULL 
-  AND ingestion_time IS NOT NULL
-  AND dst_ip IS NOT NULL
-PRIMARY KEY (is_anomaly, ingestion_time, src_ip, dst_ip)
-WITH CLUSTERING ORDER BY (ingestion_time DESC);
