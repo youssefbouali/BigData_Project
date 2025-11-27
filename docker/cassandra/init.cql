@@ -68,6 +68,7 @@ CREATE INDEX IF NOT EXISTS idx_attack_type ON netflow.flows (attack_type);
 -- DROP TABLE IF EXISTS netflow.predictions;
 
 CREATE TABLE IF NOT EXISTS netflow.predictions (
+    prediction_id UUID DEFAULT uuid(),   
     src_ip TEXT,
     dst_ip TEXT,
     src_port INT,
@@ -76,5 +77,12 @@ CREATE TABLE IF NOT EXISTS netflow.predictions (
     is_anomaly INT,
     anomaly_score DOUBLE,
     ingestion_time TIMESTAMP,
-    PRIMARY KEY ((src_ip), ingestion_time, dst_ip)
-) WITH CLUSTERING ORDER BY (ingestion_time DESC, dst_ip ASC);
+
+    PRIMARY KEY ((src_ip), ingestion_time, prediction_id)
+)
+WITH CLUSTERING ORDER BY (ingestion_time DESC, prediction_id ASC)
+AND compaction = {
+    'class': 'TimeWindowCompactionStrategy',
+    'compaction_window_unit': 'HOURS',
+    'compaction_window_size': 6
+};
