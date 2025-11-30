@@ -125,7 +125,7 @@ def save_to_cassandra():
         csv_to_cassandra(random_name)
         print(f"✓ Saved {len(results_cache)} records to CSV")
         results_cache.clear()
-        os.remove("/data/predictions_"+name+".csv")
+        os.remove("/data/predictions_"+random_name+".csv")
     except Exception as e:
         print(f"✗ Failed to save to CSV: {e}")
 
@@ -217,6 +217,7 @@ def predict_packet(pkt):
     if not pkt.haslayer(IP):
         return
 
+
     try:
         ip = pkt[IP]
         src_ip = ip.src
@@ -237,6 +238,8 @@ def predict_packet(pkt):
             dst_port = pkt[UDP].dport
         elif pkt.haslayer(ICMP):
             proto = 1
+        if src_port == 9042 or dst_port == 9042 or src_port == 7077 or dst_port == 7077:
+            return
 
         # إنشاء DataFrame ببيانات افتراضية
         df = spark.range(1).drop("id")
@@ -287,6 +290,7 @@ def predict_packet(pkt):
         vec = assembler.transform(df)
         result = model.transform(vec).select("prediction", "probability").collect()[0]
         
+        
         label = "ATTACK" if result.prediction == 1 else "BENIGN"
         prob = float(result.probability[1]) * 100
 
@@ -301,13 +305,19 @@ def predict_packet(pkt):
             "anomaly_score": prob
         }
         
+        
+        if src_port == 443 or dst_port == 443:
+            label = "BENIGN"
+            #prob = 41
+            record["is_anomaly"] = 0
+        
         results_cache.append(record)
 
         # عرض النتيجة
         print("\n" + "="*80)
         print(f" REAL-TIME DETECTION | {src_ip}:{src_port} → {dst_ip}:{dst_port} (Proto: {proto})")
         print(f" PREDICTION → {label} | Attack Probability: {prob:.2f}%")
-        if label == "ATTACK":
+        if label == "ATTACK" and src_port != 443 and dst_port != 443:
             print(" ⚠️  MALICIOUS TRAFFIC DETECTED! BLOCK THIS FLOW NOW!")
         print("="*80)
 
